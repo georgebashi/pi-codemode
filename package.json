@@ -1,0 +1,25 @@
+{
+  "name": "pi-codemode",
+  "version": "0.1.0",
+  "description": "Code Mode extension for Pi — execute tools via TypeScript code",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "dependencies": {
+    "esbuild": "^0.27.3",
+    "minisearch": "^7.2.0",
+    "pi-mcp-adapter": "^2.1.2",
+    "typescript": "^5.9.3",
+    "yaml": "^2.8.2",
+    "zx": "^8.8.5"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4"
+  }
+}
