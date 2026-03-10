@@ -35,7 +35,6 @@ Write code using the tools.* API. Your code is type-checked before execution.
 
 Available tools in code:
 - tools.read({ path }) → file content as string
-- tools.bash({ command }) → { output, exitCode }
 - tools.write({ path, content }) → void
 - tools.<server>.<tool>(args) → call MCP tools (e.g., tools.slack.channels_me())
 - tools.search_tools({ query }) → discover available tools
@@ -47,7 +46,7 @@ Return a value to include it in the result. Type errors are returned for correct
     parameters: Type.Object({
       code: Type.String({
         description:
-          "TypeScript code body. Has access to tools.read(), tools.bash(), tools.write(), tools.<server>.<tool>() for MCP, tools.search_tools(), print(), and tools.progress().",
+          "TypeScript code body. Has access to tools.read(), tools.write(), tools.<server>.<tool>() for MCP, tools.search_tools(), print(), and tools.progress().",
       }),
     }),
 
@@ -68,7 +67,7 @@ Return a value to include it in the result. Type errors are returned for correct
         params.code,
         typeDefs,
         bindings,
-        { timeout, maxOutputSize }
+        { timeout, maxOutputSize, cwd: bindingsOptions.cwd, signal }
       );
 
       if (!result.success) {

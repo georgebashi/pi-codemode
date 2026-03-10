@@ -1,7 +1,7 @@
 // type-generator.ts — Generate TypeScript type definitions for the tool API.
 //
 // Three outputs:
-// 1. Built-in tool types (read, bash, write, search_tools, progress) — hand-crafted
+// 1. Built-in tool types (read, write, search_tools, progress) + zx shell — hand-crafted
 // 2. MCP server types — full typed interfaces from JSON Schema (for type checker)
 // 3. MCP server summary — compact server/tool listing (for system prompt)
 
@@ -30,18 +30,6 @@ interface BuiltinTools {
     /** Maximum lines to read */
     limit?: number;
   }): Promise<string>;
-
-  /**
-   * Execute a bash command in the current working directory.
-   * Returns stdout+stderr combined and the exit code.
-   * Output is truncated to 2000 lines / 50KB.
-   */
-  bash(params: {
-    /** The bash command to execute */
-    command: string;
-    /** Timeout in seconds (optional) */
-    timeout?: number;
-  }): Promise<{ output: string; exitCode: number }>;
 
   /**
    * Write content to a file. Creates parent directories automatically.

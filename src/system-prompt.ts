@@ -56,14 +56,14 @@ return { deps: Object.keys(JSON.parse(pkg).dependencies || {}), hasReadme: readm
 \`\`\`typescript
 // Run independent commands in parallel
 const [gitStatus, gitBranch, nodeVersion] = await Promise.all([
-  tools.bash({ command: "git status --porcelain" }),
-  tools.bash({ command: "git branch --show-current" }),
-  tools.bash({ command: "node --version" }),
+  $\`git status --porcelain\`,
+  $\`git branch --show-current\`,
+  $\`node --version\`,
 ]);
 return {
-  dirty: gitStatus.output.trim().length > 0,
-  branch: gitBranch.output.trim(),
-  node: nodeVersion.output.trim(),
+  dirty: gitStatus.stdout.trim().length > 0,
+  branch: gitBranch.stdout.trim(),
+  node: nodeVersion.stdout.trim(),
 };
 \`\`\`
 
@@ -73,8 +73,8 @@ Chain calls when a later step depends on an earlier result.
 
 \`\`\`typescript
 // Step 1: Find files
-const found = await tools.bash({ command: "find src -name '*.test.ts'" });
-const files = found.output.split('\\n').filter(f => f.trim());
+const found = await $\`find src -name '*.test.ts'\`;
+const files = found.stdout.split('\\n').filter(f => f.trim());
 
 // Step 2: Read all found files in parallel
 const contents = await Promise.all(
@@ -99,8 +99,8 @@ const deps = Object.keys(JSON.parse(pkg).dependencies || {});
 
 const counts = await Promise.all(
   deps.map(async dep => {
-    const r = await tools.bash({ command: \`grep -rn "from '\${dep}'" --include='*.ts' . | wc -l\` });
-    return { dep, count: parseInt(r.output.trim()) };
+    const r = await $\`grep -rn "from '\${dep}'" --include='*.ts' . | wc -l\`;
+    return { dep, count: parseInt(r.stdout.trim()) };
   })
 );
 return counts.filter(c => c.count > 0);

@@ -2,15 +2,16 @@
 //
 // Each binding wraps a real Pi tool implementation and returns simplified values:
 // - read → string (the file content)
-// - bash → { output: string; exitCode: number }
 // - write → void
 // - tools.<server>.<tool>(args) → string (MCP tools as per-server namespaces)
 // - search_tools → string (FTS via MiniSearch)
 // - progress → void (streams to UI)
+//
+// Shell commands are handled by zx's $ (exposed directly in the sandbox),
+// not through a tools.bash() binding.
 
 import {
   createReadTool,
-  createBashTool,
   createWriteTool,
 } from "@mariozechner/pi-coding-agent";
 import type { AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
@@ -24,11 +25,6 @@ export interface ToolBindings {
     offset?: number;
     limit?: number;
   }): Promise<string>;
-
-  bash(params: {
-    command: string;
-    timeout?: number;
-  }): Promise<{ output: string; exitCode: number }>;
 
   write(params: { path: string; content: string }): Promise<void>;
 
@@ -60,7 +56,6 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
 
   // Create fresh tool instances for the current cwd
   const readTool = createReadTool(cwd);
-  const bashTool = createBashTool(cwd);
   const writeTool = createWriteTool(cwd);
 
   const toolCallId = `codemode-${Date.now()}`;
@@ -74,20 +69,6 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
         .map((c) => c.text)
         .join("\n");
       return text;
-    },
-
-    async bash(params) {
-      if (signal?.aborted) throw new Error("Execution cancelled");
-      const result = await bashTool.execute(toolCallId, params, signal);
-      const output = result.content
-        .filter((c): c is { type: "text"; text: string } => c.type === "text")
-        .map((c) => c.text)
-        .join("\n");
-      const exitCode =
-        (result.details as any)?.exitCode ??
-        (result.details as any)?.code ??
-        0;
-      return { output, exitCode };
     },
 
     async write(params) {

@@ -2,8 +2,16 @@
 //
 // Pipeline: type-check → esbuild strip types → vm.runInContext
 // The vm provides a clean namespace with only our tool bindings and safe globals.
+//
+// Shell commands use zx's $ directly (no tools.bash wrapper).
+// The $ instance is pre-configured with the working directory, abort signal,
+// and output truncation (tail-truncate to last 2000 lines / 50KB).
 
 import vm from "node:vm";
+import { randomBytes } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { transformSync } from "esbuild";
 import { typeCheck, type TypeCheckError } from "./type-checker.js";
 import type { ToolBindings } from "./tool-bindings.js";
@@ -31,10 +39,235 @@ export interface SandboxOptions {
   timeout?: number;
   /** Max output size in bytes (default: 50KB) */
   maxOutputSize?: number;
+  /** Working directory for shell commands (default: process.cwd()) */
+  cwd?: string;
+  /** Abort signal for cancellation */
+  signal?: AbortSignal;
 }
 
 const DEFAULT_TIMEOUT = 120_000;
 const DEFAULT_MAX_OUTPUT = 50 * 1024;
+
+/** Max lines to keep from command output (tail truncation, matching pi's bash tool) */
+const MAX_OUTPUT_LINES = 2000;
+/** Max bytes to keep from command output */
+const MAX_OUTPUT_BYTES = 50 * 1024;
+
+/**
+ * Generate a unique temp file path for storing full command output.
+ */
+function getTempFilePath(): string {
+  const id = randomBytes(8).toString("hex");
+  return join(tmpdir(), `pi-codemode-${id}.log`);
+}
+
+/**
+ * Sanitize binary/control characters from command output.
+ * Strips characters that crash string-width or cause TUI display issues:
+ * - Control characters (except tab, newline, carriage return)
+ * - Unicode Format characters (crash string-width)
+ * - Characters with undefined code points
+ * Lone surrogates are handled by Array.from() which replaces them.
+ */
+function sanitizeOutput(str: string): string {
+  return Array.from(str)
+    .filter((char) => {
+      const code = char.codePointAt(0);
+      if (code === undefined) return false;
+      // Allow tab, newline, carriage return
+      if (code === 0x09 || code === 0x0a || code === 0x0d) return true;
+      // Filter control characters (0x00-0x1F)
+      if (code <= 0x1f) return false;
+      // Filter Unicode format characters (crash string-width)
+      if (code >= 0xfff9 && code <= 0xfffb) return false;
+      return true;
+    })
+    .join("");
+}
+
+/**
+ * Truncate a string from the end of a byte buffer, keeping maxBytes from the tail.
+ * Handles multi-byte UTF-8 characters correctly by finding a valid character boundary.
+ */
+function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
+  const buf = Buffer.from(str, "utf-8");
+  if (buf.length <= maxBytes) return str;
+
+  let start = buf.length - maxBytes;
+  // Advance to a valid UTF-8 character boundary
+  while (start < buf.length && (buf[start] & 0xc0) === 0x80) {
+    start++;
+  }
+  return buf.slice(start).toString("utf-8");
+}
+
+interface TruncationResult {
+  /** The (possibly truncated) text */
+  text: string;
+  /** Whether truncation occurred */
+  wasTruncated: boolean;
+  /** Path to temp file with full output (only if truncated) */
+  fullOutputPath?: string;
+}
+
+/**
+ * Truncate a string from the tail (keep the last N lines / bytes).
+ * Matches the behavior of pi's built-in bash tool:
+ * - Tail truncation: keeps last 2000 lines or 50KB
+ * - Edge case: if a single line exceeds the byte limit, keeps the tail bytes of that line
+ * - Writes full output to a temp file when truncated
+ * - Includes actionable notice with line range and temp file path
+ * - Sanitizes binary/control characters
+ */
+function truncateFromTail(rawText: string): TruncationResult {
+  // Sanitize binary/control characters first
+  const text = sanitizeOutput(rawText);
+
+  const totalBytes = Buffer.byteLength(text, "utf-8");
+  const lines = text.split("\n");
+  const totalLines = lines.length;
+
+  if (totalLines <= MAX_OUTPUT_LINES && totalBytes <= MAX_OUTPUT_BYTES) {
+    return { text, wasTruncated: false };
+  }
+
+  // Write full output to temp file before truncating
+  const fullOutputPath = getTempFilePath();
+  try {
+    writeFileSync(fullOutputPath, text, "utf-8");
+  } catch {
+    // If we can't write the temp file, continue without it
+  }
+
+  // Work backwards, keeping lines that fit within both limits
+  const kept: string[] = [];
+  let keptBytes = 0;
+
+  for (let i = lines.length - 1; i >= 0 && kept.length < MAX_OUTPUT_LINES; i--) {
+    const lineBytes = Buffer.byteLength(lines[i], "utf-8") + (kept.length > 0 ? 1 : 0);
+    if (keptBytes + lineBytes > MAX_OUTPUT_BYTES) {
+      // Edge case: if we haven't kept ANY lines yet and this single line exceeds
+      // the byte limit, keep the tail bytes of this line (partial truncation)
+      if (kept.length === 0) {
+        const partialLine = truncateStringToBytesFromEnd(lines[i], MAX_OUTPUT_BYTES);
+        kept.unshift(partialLine);
+        keptBytes = Buffer.byteLength(partialLine, "utf-8");
+      }
+      break;
+    }
+    kept.unshift(lines[i]);
+    keptBytes += lineBytes;
+  }
+
+  const startLine = totalLines - kept.length + 1;
+  const endLine = totalLines;
+  let notice: string;
+  if (kept.length === 1 && kept[0] !== lines[totalLines - 1]) {
+    // Partial single-line case
+    const keptSize = formatSize(keptBytes);
+    const fullSize = formatSize(totalBytes);
+    notice = `\n\n[Showing last ${keptSize} of line ${endLine} (${fullSize} total). Full output: ${fullOutputPath}]`;
+  } else {
+    notice = `\n\n[Showing lines ${startLine}-${endLine} of ${totalLines}. Full output: ${fullOutputPath}]`;
+  }
+
+  return {
+    text: kept.join("\n") + notice,
+    wasTruncated: true,
+    fullOutputPath,
+  };
+}
+
+/**
+ * Format bytes as human-readable size.
+ */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+/**
+ * Wrap a ProcessOutput in a Proxy that returns truncated stdout/stderr/stdall.
+ *
+ * zx defines stdout/stderr/stdall as non-configurable lazy getters on ProcessOutput,
+ * so we can't redefine them with Object.defineProperty. Instead we use a Proxy that
+ * intercepts property access and returns truncated values for those three properties.
+ * The Proxy preserves instanceof checks and all other ProcessOutput behavior.
+ */
+function truncateProcessOutput(output: zx.ProcessOutput): zx.ProcessOutput {
+  // Access raw values (triggers the lazy join from buffer chunks)
+  const rawStdout = output.stdout;
+  const rawStderr = output.stderr;
+  const rawStdall = output.stdall;
+
+  const truncStdout = truncateFromTail(rawStdout);
+  const truncStderr = truncateFromTail(rawStderr);
+  const truncStdall = truncateFromTail(rawStdall);
+
+  // Short-circuit if nothing was truncated (sanitization may still differ)
+  if (!truncStdout.wasTruncated && !truncStderr.wasTruncated) {
+    // Even if not truncated, sanitization may have changed the text
+    if (truncStdout.text === rawStdout && truncStderr.text === rawStderr) {
+      return output;
+    }
+  }
+
+  // Return a Proxy that intercepts stdout/stderr/stdall access
+  return new Proxy(output, {
+    get(target, prop, receiver) {
+      if (prop === 'stdout') return truncStdout.text;
+      if (prop === 'stderr') return truncStderr.text;
+      if (prop === 'stdall') return truncStdall.text;
+      return Reflect.get(target, prop, receiver);
+    }
+  });
+}
+
+/**
+ * Create a $ that pre-configures cwd + signal and truncates output.
+ *
+ * Wraps zx's Shell so that resolved ProcessOutput objects have their
+ * stdout/stderr/stdall tail-truncated to MAX_OUTPUT_LINES / MAX_OUTPUT_BYTES.
+ * This prevents huge command output from blowing up the LLM context.
+ */
+function createTruncating$(cwd: string, signal?: AbortSignal) {
+  const opts: Record<string, unknown> = { cwd };
+  if (signal) opts.signal = signal;
+  const base$ = zx.$(opts as any);
+
+  // Return a tagged template function that wraps the ProcessPromise
+  const wrapped = function(pieces: TemplateStringsArray, ...args: any[]) {
+    const proc = base$(pieces, ...args);
+
+    // Wrap .then to intercept the ProcessOutput and truncate it
+    const origThen = proc.then.bind(proc);
+    proc.then = function<T1 = zx.ProcessOutput, T2 = never>(
+      onFulfill?: ((value: zx.ProcessOutput) => T1 | PromiseLike<T1>) | null,
+      onReject?: ((reason: any) => T2 | PromiseLike<T2>) | null
+    ): Promise<T1 | T2> {
+      return origThen(
+        (output: zx.ProcessOutput) => {
+          const truncated = truncateProcessOutput(output);
+          return onFulfill ? onFulfill(truncated) : truncated as any;
+        },
+        (err: any) => {
+          // On error, zx throws a ProcessOutput — truncate it too
+          if (err instanceof zx.ProcessOutput) {
+            err = truncateProcessOutput(err);
+          }
+          if (onReject) return onReject(err);
+          throw err;
+        }
+      );
+    } as any;
+
+    return proc;
+  };
+
+  // Copy over the options/config interface so $({...}) chaining still works
+  return Object.assign(wrapped, base$) as typeof base$;
+}
 
 /**
  * Execute TypeScript code in a sandboxed vm context with tool bindings.
@@ -53,6 +286,12 @@ export async function executeCode(
   const start = performance.now();
   const timeout = options?.timeout ?? DEFAULT_TIMEOUT;
   const maxOutput = options?.maxOutputSize ?? DEFAULT_MAX_OUTPUT;
+
+  const cwd = options?.cwd ?? process.cwd();
+  const signal = options?.signal;
+
+  // Set zx's working directory for this execution
+  zx.$.cwd = cwd;
 
   // Step 1: Type-check
   const checkResult = typeCheck(tsCode, typeDefs);
@@ -168,8 +407,8 @@ export async function executeCode(
     btoa,
     YAML,
 
-    // zx shell scripting utilities
-    $: zx.$,
+    // zx shell scripting utilities — $ is configured with cwd and abort signal
+    $: createTruncating$(cwd, signal),
     cd: zx.cd,
     within: zx.within,
     nothrow: zx.nothrow,
@@ -195,8 +434,8 @@ export async function executeCode(
     });
 
     // Execute the async function (vm timeout doesn't cover async,
-    // so we also race against a timeout promise)
-    const returnValue = await Promise.race([
+    // so we also race against a timeout promise and abort signal)
+    const racePromises: Promise<any>[] = [
       fn(),
       new Promise<never>((_, reject) =>
         setTimeout(
@@ -204,7 +443,22 @@ export async function executeCode(
           timeout
         )
       ),
-    ]);
+    ];
+
+    // If we have an abort signal, race against it too
+    if (signal) {
+      racePromises.push(
+        new Promise<never>((_, reject) => {
+          if (signal.aborted) {
+            reject(new Error("Execution cancelled"));
+            return;
+          }
+          signal.addEventListener("abort", () => reject(new Error("Execution cancelled")), { once: true });
+        })
+      );
+    }
+
+    const returnValue = await Promise.race(racePromises);
 
     return {
       success: true,
