@@ -68,7 +68,7 @@ Return a value to include it in the result. Type errors are returned for correct
         params.code,
         typeDefs,
         bindings,
-        { timeout, maxOutputSize, cwd: bindingsOptions.cwd, signal }
+        { timeout, maxOutputSize, cwd: bindingsOptions.cwd, signal, onUpdate }
       );
 
       if (!result.success) {

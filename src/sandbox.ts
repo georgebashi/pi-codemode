@@ -43,6 +43,8 @@ export interface SandboxOptions {
   cwd?: string;
   /** Abort signal for cancellation */
   signal?: AbortSignal;
+  /** Callback for streaming progress updates to the UI */
+  onUpdate?: (update: { content: Array<{ type: string; text: string }>; details?: any }) => void;
 }
 
 const DEFAULT_TIMEOUT = 120_000;
@@ -225,15 +227,68 @@ function truncateProcessOutput(output: zx.ProcessOutput): zx.ProcessOutput {
 }
 
 /**
- * Create a $ that pre-configures cwd + signal and truncates output.
+ * Create a $ that pre-configures cwd + signal, truncates output, and streams
+ * partial output to the UI via onUpdate.
  *
- * Wraps zx's Shell so that resolved ProcessOutput objects have their
- * stdout/stderr/stdall tail-truncated to MAX_OUTPUT_LINES / MAX_OUTPUT_BYTES.
- * This prevents huge command output from blowing up the LLM context.
+ * Wraps zx's Shell so that:
+ * - Resolved ProcessOutput objects have stdout/stderr/stdall tail-truncated
+ * - As commands run, partial output is streamed to the UI via onUpdate
+ * - cwd and abort signal are pre-configured
  */
-function createTruncating$(cwd: string, signal?: AbortSignal) {
+function createTruncating$(
+  cwd: string,
+  signal?: AbortSignal,
+  onUpdate?: SandboxOptions["onUpdate"]
+) {
   const opts: Record<string, unknown> = { cwd };
   if (signal) opts.signal = signal;
+
+  // Hook into zx's log system to stream partial output to the UI.
+  // zx calls $.log({ kind: "stdout", data: Buffer }) for each chunk of output.
+  // We accumulate a rolling buffer and send truncated snapshots via onUpdate.
+  if (onUpdate) {
+    const streamChunks: Buffer[] = [];
+    let streamBytes = 0;
+    const maxStreamBytes = MAX_OUTPUT_BYTES * 2; // keep 2x for truncation headroom
+
+    opts.log = (entry: any) => {
+      if (entry.kind === "stdout" || entry.kind === "stderr") {
+        const data = entry.data as Buffer;
+        streamChunks.push(data);
+        streamBytes += data.length;
+
+        // Trim old chunks if rolling buffer is too large
+        while (streamBytes > maxStreamBytes && streamChunks.length > 1) {
+          const removed = streamChunks.shift()!;
+          streamBytes -= removed.length;
+        }
+
+        // Send truncated snapshot to the UI
+        const fullBuffer = Buffer.concat(streamChunks);
+        const fullText = sanitizeOutput(fullBuffer.toString("utf-8"));
+        const lines = fullText.split("\n");
+        // Quick tail truncation for the streaming preview
+        let preview: string;
+        if (lines.length > MAX_OUTPUT_LINES) {
+          preview = lines.slice(-MAX_OUTPUT_LINES).join("\n");
+        } else if (Buffer.byteLength(fullText, "utf-8") > MAX_OUTPUT_BYTES) {
+          // Just take the tail bytes
+          preview = truncateStringToBytesFromEnd(fullText, MAX_OUTPUT_BYTES);
+        } else {
+          preview = fullText;
+        }
+
+        onUpdate({
+          content: [{ type: "text", text: preview }],
+          details: { streaming: true },
+        });
+      }
+    };
+  } else {
+    // Suppress all log output when not streaming
+    opts.log = () => {};
+  }
+
   const base$ = zx.$(opts as any);
 
   // Return a tagged template function that wraps the ProcessPromise
@@ -289,6 +344,7 @@ export async function executeCode(
 
   const cwd = options?.cwd ?? process.cwd();
   const signal = options?.signal;
+  const onUpdate = options?.onUpdate;
 
   // Set zx's working directory for this execution
   zx.$.cwd = cwd;
@@ -408,7 +464,7 @@ export async function executeCode(
     YAML,
 
     // zx shell scripting utilities — $ is configured with cwd and abort signal
-    $: createTruncating$(cwd, signal),
+    $: createTruncating$(cwd, signal, onUpdate),
     cd: zx.cd,
     within: zx.within,
     nothrow: zx.nothrow,
