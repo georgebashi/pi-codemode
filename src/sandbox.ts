@@ -17,6 +17,7 @@ import { typeCheck, type TypeCheckError } from "./type-checker.js";
 import type { ToolBindings } from "./tool-bindings.js";
 import YAML from "yaml";
 import * as zx from "zx";
+import { simpleGit } from "simple-git";
 
 // Suppress zx's default verbose logging (prints commands to stderr)
 zx.$.verbose = false;
@@ -479,6 +480,9 @@ export async function executeCode(
     path: zx.path,
     fs: zx.fs,
     ProcessOutput: zx.ProcessOutput,
+
+    // simple-git — pre-configured for the working directory
+    git: simpleGit(cwd),
   });
 
   // Step 4: Execute in vm

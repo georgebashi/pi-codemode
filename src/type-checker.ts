@@ -126,6 +126,7 @@ export function initTypeChecker(): void {
     { dir: "@types/fs-extra", prefix: "node_modules/@types/fs-extra" },
     { dir: "@types/jsonfile", prefix: "node_modules/@types/jsonfile" },
     { dir: "zx", prefix: "node_modules/zx" },
+    { dir: "simple-git", prefix: "node_modules/simple-git" },
   ];
 
   for (const pkg of packagesToLoad) {

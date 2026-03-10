@@ -143,6 +143,13 @@ declare const path: typeof import('path');
 /** Node.js fs-extra module (fs + extra utilities). */
 declare const fs: typeof import('fs-extra');
 
+// --- simple-git (resolved from real simple-git .d.ts via module resolution) ---
+
+import type { SimpleGit } from 'simple-git';
+
+/** Pre-configured simple-git instance for the working directory. */
+declare const git: SimpleGit;
+
 // Re-export types so user code can reference ProcessOutput/ProcessPromise by name
 type _ProcessOutput = ProcessOutput;
 type _ProcessPromise = ProcessPromise;

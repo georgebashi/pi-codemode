@@ -266,6 +266,8 @@ async function executeCode(tsCode, bindings, { skipTypeCheck = false } = {}) {
     fs: require("fs-extra"),
     os: require("os"),
     ProcessOutput: zx.ProcessOutput,
+    // simple-git — pre-configured for cwd
+    git: require("simple-git").simpleGit(process.cwd()),
   });
 
   try {
@@ -527,6 +529,37 @@ async function test(name, fn) {
       assert(val.hasTempPath, "stdout has temp file path");
       assert(val.lineCount <= 2010, "line count reduced (got " + val.lineCount + ")");
       assert(val.lineCount >= 1900, "still has ~2000 lines (got " + val.lineCount + ")");
+    }
+  });
+
+  // --- simple-git tests ---
+
+  await test("Pipeline: simple-git status (skip type check)", async () => {
+    const result = await executeCode(
+      'const status = await git.status();\n' +
+      'return { branch: status.current, isClean: status.isClean() };',
+      mockBindings,
+      { skipTypeCheck: true }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    if (result.success) {
+      assert(typeof result.returnValue.branch === "string", "has branch: " + result.returnValue.branch);
+      assert(typeof result.returnValue.isClean === "boolean", "isClean is boolean");
+    }
+  });
+
+  await test("Pipeline: simple-git log (skip type check)", async () => {
+    const result = await executeCode(
+      'const log = await git.log({ maxCount: 3 });\n' +
+      'return log.all.map(c => ({ hash: c.hash.slice(0, 7), message: c.message }));',
+      mockBindings,
+      { skipTypeCheck: true }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    if (result.success) {
+      assert(Array.isArray(result.returnValue), "returns array");
+      assert(result.returnValue.length > 0, "has commits");
+      assert(result.returnValue[0].hash.length === 7, "has short hash");
     }
   });
 
