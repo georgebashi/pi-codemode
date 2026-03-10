@@ -136,9 +136,7 @@ export function initTypeChecker(): void {
     }
   }
 
-  console.log(
-    `Type checker: ${sourceFiles.size} files loaded (${directories.size} dirs)`
-  );
+
 }
 
 /** Add a file to the virtual file system. */

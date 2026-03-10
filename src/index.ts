@@ -48,9 +48,7 @@ export default function codeMode(pi: ExtensionAPI) {
     if (mcpClient.available) {
       const servers = mcpClient.getServers();
       const totalTools = servers.reduce((sum, s) => sum + s.tools.length, 0);
-      console.log(
-        `Code Mode: ${servers.length} MCP server(s), ${totalTools} tools from cache (lazy connect)`
-      );
+
     }
   } catch (e: any) {
     console.warn(`Code Mode: MCP init failed: ${e.message}`);
@@ -99,10 +97,7 @@ export default function codeMode(pi: ExtensionAPI) {
     // Activate code mode: only execute_tools visible to LLM
     activateCodeMode();
 
-    ctx.ui.setStatus(
-      "codemode",
-      ctx.ui.theme.fg("accent", "⚡ Code Mode")
-    );
+
   });
 
   // --- Shutdown ---
@@ -133,14 +128,11 @@ export default function codeMode(pi: ExtensionAPI) {
 
       if (enabled) {
         activateCodeMode();
-        ctx.ui.setStatus(
-          "codemode",
-          ctx.ui.theme.fg("accent", "⚡ Code Mode")
-        );
+
         ctx.ui.notify("Code mode enabled", "info");
       } else {
         deactivateCodeMode();
-        ctx.ui.setStatus("codemode", "");
+
         ctx.ui.notify("Code mode disabled — all tools available", "info");
       }
     },
