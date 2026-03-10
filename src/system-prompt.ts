@@ -136,6 +136,7 @@ print(found);
 - \`YAML.parse()\` / \`YAML.stringify()\` — parse and serialize YAML
 
 ### Important
+- **Use \`git\` for all git operations** — a pre-configured simple-git instance is available (e.g., \`await git.status()\`, \`await git.log()\`, \`await git.add('.')\`, \`await git.commit('msg')\`)
 - **Parallelize independent calls** — use \`Promise.all\` whenever calls don't depend on each other
 - **Chain dependent calls** — use the result of one call to determine what to call next
 - Both \`print()\` output and \`return\` values are included in the result
