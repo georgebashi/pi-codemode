@@ -8,7 +8,10 @@ import { transformSync } from "esbuild";
 import { typeCheck, type TypeCheckError } from "./type-checker.js";
 import type { ToolBindings } from "./tool-bindings.js";
 import YAML from "yaml";
+import * as zx from "zx";
 
+// Suppress zx's default verbose logging (prints commands to stderr)
+zx.$.verbose = false;
 export interface ExecutionResult {
   success: boolean;
   /** Type errors or runtime errors */
@@ -164,6 +167,23 @@ export async function executeCode(
     atob,
     btoa,
     YAML,
+
+    // zx shell scripting utilities
+    $: zx.$,
+    cd: zx.cd,
+    within: zx.within,
+    nothrow: zx.nothrow,
+    quiet: zx.quiet,
+    retry: zx.retry,
+    sleep: zx.sleep,
+    chalk: zx.chalk,
+    which: zx.which,
+    quote: zx.quote,
+    glob: zx.glob,
+    os: zx.os,
+    path: zx.path,
+    fs: zx.fs,
+    ProcessOutput: zx.ProcessOutput,
   });
 
   // Step 4: Execute in vm

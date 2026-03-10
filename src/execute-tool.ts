@@ -1,209 +1,207 @@
-// sandbox.ts — Execute LLM-generated code in a Node.js vm context.
+// execute-tool.ts — The execute_tools tool definition.
 //
-// Pipeline: type-check → esbuild strip types → vm.runInContext
-// The vm provides a clean namespace with only our tool bindings and safe globals.
+// This is the single tool that replaces most of Pi's built-in tools.
+// The LLM writes TypeScript code that calls tools as typed functions.
 
-import vm from "node:vm";
-import { transformSync } from "esbuild";
-import { typeCheck, type TypeCheckError } from "./type-checker.js";
-import type { ToolBindings } from "./tool-bindings.js";
+import type { ExtensionContext, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
+import { executeCode, type ExecutionResult } from "./sandbox.js";
+import { createToolBindings, type ToolBindingsOptions } from "./tool-bindings.js";
 
-export interface ExecutionResult {
-  success: boolean;
-  /** Type errors or runtime errors */
-  errors: TypeCheckError[];
-  /** 'type' for type-check failures, 'runtime' for execution errors */
-  errorKind?: 'type' | 'runtime';
-  /** Captured console.log / print output */
-  logs: string[];
-  /** The return value of the code (if any) */
-  returnValue: unknown;
-  /** Execution time in ms */
-  elapsedMs: number;
-}
-
-export interface SandboxOptions {
-  /** Max execution time in ms (default: 120_000 = 2 minutes) */
+export interface ExecuteToolOptions {
+  /** TypeScript type definitions for the tool API */
+  typeDefs: string;
+  /** Options for creating tool bindings */
+  bindingsOptions: Omit<ToolBindingsOptions, "signal" | "onUpdate">;
+  /** Max execution timeout in ms */
   timeout?: number;
-  /** Max output size in bytes (default: 50KB) */
+  /** Max output size in bytes */
   maxOutputSize?: number;
 }
 
-const DEFAULT_TIMEOUT = 120_000;
-const DEFAULT_MAX_OUTPUT = 50 * 1024;
-
 /**
- * Execute TypeScript code in a sandboxed vm context with tool bindings.
- *
- * @param tsCode - The TypeScript code body (no function wrapper needed)
- * @param typeDefs - TypeScript declarations for the tool API
- * @param bindings - Runtime tool functions
- * @param options - Timeout and output limits
+ * Create the execute_tools tool definition.
  */
-export async function executeCode(
-  tsCode: string,
-  typeDefs: string,
-  bindings: ToolBindings,
-  options?: SandboxOptions
-): Promise<ExecutionResult> {
-  const start = performance.now();
-  const timeout = options?.timeout ?? DEFAULT_TIMEOUT;
-  const maxOutput = options?.maxOutputSize ?? DEFAULT_MAX_OUTPUT;
+export function createExecuteTool(
+  options: ExecuteToolOptions
+): ToolDefinition {
+  const { typeDefs, bindingsOptions, timeout, maxOutputSize } = options;
 
-  // Step 1: Type-check
-  const checkResult = typeCheck(tsCode, typeDefs);
-  if (checkResult.errors.length > 0) {
-    return {
-      success: false,
-      errorKind: 'type',
-      errors: checkResult.errors,
-      logs: [],
-      returnValue: undefined,
-      elapsedMs: performance.now() - start,
-    };
-  }
+  return {
+    name: "execute_tools",
+    label: "Execute Tools",
+    description: `Execute TypeScript code that calls tools as typed functions.
+Write code using the tools.* API. Your code is type-checked before execution.
 
-  // Step 2: Strip types via esbuild
-  const wrappedTs = `(async () => {\n${tsCode}\n})`;
-  let jsCode: string;
-  try {
-    const result = transformSync(wrappedTs, {
-      loader: "ts",
-      target: "esnext",
-    });
-    // esbuild may add a trailing semicolon after the arrow function
-    jsCode = result.code.trim().replace(/;$/, "");
-  } catch (e: any) {
-    return {
-      success: false,
-      errorKind: 'type',
-      errors: [
-        {
-          line: 0,
-          col: 0,
-          message: `esbuild transform error: ${e.message}`,
+Available tools in code:
+- tools.read({ path }) → file content as string
+- tools.bash({ command }) → { output, exitCode }
+- tools.write({ path, content }) → void
+- tools.<server>.<tool>(args) → call MCP tools (e.g., tools.slack.channels_me())
+- tools.search_tools({ query }) → discover available tools
+- tools.progress(msg) → stream progress to UI
+- print(...) → output to include in result
+
+Return a value to include it in the result. Type errors are returned for correction.`,
+
+    parameters: Type.Object({
+      code: Type.String({
+        description:
+          "TypeScript code body. Has access to tools.read(), tools.bash(), tools.write(), tools.<server>.<tool>() for MCP, tools.search_tools(), print(), and tools.progress().",
+      }),
+    }),
+
+    async execute(
+      toolCallId: string,
+      params: { code: string },
+      signal: AbortSignal | undefined,
+      onUpdate: any,
+      ctx: ExtensionContext
+    ) {
+      const bindings = createToolBindings({
+        ...bindingsOptions,
+        signal,
+        onUpdate,
+      });
+
+      const result: ExecutionResult = await executeCode(
+        params.code,
+        typeDefs,
+        bindings,
+        { timeout, maxOutputSize }
+      );
+
+      if (!result.success) {
+        const errorText = result.errors
+          .map((e) => (e.line > 0 ? `Line ${e.line}: ${e.message}` : e.message))
+          .join("\n");
+
+        let text: string;
+          if (result.errorKind === 'type') {
+            text = `Type errors (code was NOT executed):\n${errorText}\n\nFix the type errors and try again.`;
+          } else {
+            text = `Runtime error:\n${errorText}\n\nThe code executed but threw an error. This may be a bug in your code or a server-side issue.`;
+          }
+
+        // Include any logs captured before the error (for runtime errors)
+        if (result.logs.length > 0) {
+          text = `Output before error:\n${result.logs.join("\n")}\n\n${text}`;
+        }
+
+        return {
+          content: [{ type: "text" as const, text }],
+          isError: true,
+          details: {
+            errors: result.errors,
+            logs: result.logs,
+            elapsedMs: result.elapsedMs,
+          },
+        };
+      }
+
+      // Format success
+      const parts: string[] = [];
+
+      if (result.logs.length > 0) {
+        parts.push(result.logs.join("\n"));
+      }
+
+      if (result.returnValue !== undefined) {
+        const formatted =
+          typeof result.returnValue === "string"
+            ? result.returnValue
+            : JSON.stringify(result.returnValue, null, 2);
+        parts.push(formatted);
+      }
+
+      const text = parts.join("\n\n") || "(no output)";
+
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          logs: result.logs,
+          returnValue: result.returnValue,
+          elapsedMs: result.elapsedMs,
         },
-      ],
-      logs: [],
-      returnValue: undefined,
-      elapsedMs: performance.now() - start,
-    };
-  }
-
-  // Step 3: Create vm context with bindings and safe globals
-  const logs: string[] = [];
-  let totalLogSize = 0;
-
-  const captureLog = (...args: unknown[]) => {
-    const line = args
-      .map((a) =>
-        typeof a === "object" && a !== null ? JSON.stringify(a) : String(a)
-      )
-      .join(" ");
-    totalLogSize += line.length;
-    if (totalLogSize <= maxOutput) {
-      logs.push(line);
-    } else if (logs[logs.length - 1] !== "[output truncated]") {
-      logs.push("[output truncated]");
-    }
-  };
-
-  const context = vm.createContext({
-    // Tool bindings
-    tools: bindings,
-    print: captureLog,
-
-    // Console (captured)
-    console: {
-      log: captureLog,
-      warn: captureLog,
-      error: captureLog,
-      info: captureLog,
+      };
     },
 
-    // Safe globals
-    Promise,
-    setTimeout,
-    clearTimeout,
-    JSON,
-    Array,
-    Object,
-    Map,
-    Set,
-    WeakMap,
-    WeakSet,
-    Math,
-    Date,
-    RegExp,
-    Error,
-    TypeError,
-    RangeError,
-    SyntaxError,
-    Number,
-    String,
-    Boolean,
-    Symbol,
-    parseInt,
-    parseFloat,
-    isNaN,
-    isFinite,
-    encodeURIComponent,
-    decodeURIComponent,
-    encodeURI,
-    decodeURI,
-    undefined,
-    NaN,
-    Infinity,
-    URL,
-    URLSearchParams,
-    TextEncoder,
-    TextDecoder,
-    structuredClone,
-    queueMicrotask,
-    atob,
-    btoa,
-  });
+    renderCall(args: { code: string }, theme: any) {
+      try {
+        const { highlightCode } = require("@mariozechner/pi-coding-agent");
+        const { Text } = require("@mariozechner/pi-tui");
+        // highlightCode returns string[] (one per line), join them
+        const highlighted = highlightCode(args.code, "typescript");
+        const text = Array.isArray(highlighted) ? highlighted.join("\n") : String(highlighted);
+        return new Text(text, 0, 0);
+      } catch {
+        const { Text } = require("@mariozechner/pi-tui");
+        return new Text(String(args.code ?? ""), 0, 0);
+      }
+    },
 
-  // Step 4: Execute in vm
-  try {
-    // Compile and get the async function
-    const fn = vm.runInContext(jsCode, context, {
-      timeout,
-      filename: "codemode.js",
-    });
+    renderResult(
+      result: any,
+      options: { expanded: boolean; isPartial: boolean },
+      theme: any
+    ) {
+      const { Text } = require("@mariozechner/pi-tui");
+      const { isPartial, expanded } = options;
 
-    // Execute the async function (vm timeout doesn't cover async,
-    // so we also race against a timeout promise)
-    const returnValue = await Promise.race([
-      fn(),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error(`Execution timed out after ${timeout}ms`)),
-          timeout
-        )
-      ),
-    ]);
+      if (isPartial) {
+        const msg = result.details?.progress
+          ? result.content?.[0]?.text ?? "Executing..."
+          : "Executing...";
+        return new Text(theme.fg("warning", msg), 0, 0);
+      }
 
-    return {
-      success: true,
-      errors: [],
-      logs,
-      returnValue,
-      elapsedMs: performance.now() - start,
-    };
-  } catch (e: any) {
-    const message = e?.message ?? String(e);
-    // Try to extract line number from stack trace
-    const stackMatch = message.match(/codemode\.js:(\d+)/);
-    const line = stackMatch ? parseInt(stackMatch[1], 10) - 1 : 0; // -1 for wrapper
+      const details = result.details ?? {};
+      const isError = result.isError;
+      const elapsed = details.elapsedMs
+        ? ` ${theme.fg("dim", `(${Math.round(details.elapsedMs)}ms)`)}`
+        : "";
 
-    return {
-      success: false,
-      errorKind: 'runtime',
-      errors: [{ line: Math.max(1, line), col: 0, message }],
-      logs, // Include any logs captured before the error
-      returnValue: undefined,
-      elapsedMs: performance.now() - start,
-    };
-  }
+      if (isError) {
+        const errors = details.errors ?? [];
+        const firstError = errors[0]?.message ?? "Unknown error";
+        if (!expanded) {
+          return new Text(
+            theme.fg("error", `✗ ${firstError}`) + elapsed,
+            0,
+            0
+          );
+        }
+        const lines = errors
+          .map(
+            (e: any) =>
+              theme.fg("error", e.line > 0 ? `Line ${e.line}: ` : "") +
+              e.message
+          )
+          .join("\n");
+        return new Text(lines + elapsed, 0, 0);
+      }
+
+      // Success
+      const text = result.content?.[0]?.text ?? "(no output)";
+      const lineCount = text.split("\n").length;
+
+      if (!expanded && lineCount > 5) {
+        const preview = text.split("\n").slice(0, 3).join("\n");
+        return new Text(
+          theme.fg("success", "✓ ") +
+            preview +
+            theme.fg("dim", `\n... ${lineCount - 3} more lines`) +
+            elapsed,
+          0,
+          0
+        );
+      }
+
+      return new Text(
+        theme.fg("success", "✓ ") + text + elapsed,
+        0,
+        0
+      );
+    },
+  } as unknown as ToolDefinition;
 }
