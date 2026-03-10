@@ -1,7 +1,7 @@
 // index.ts — Pi Code Mode extension entry point.
 //
-// Replaces most of Pi's tools with a single execute_tools tool that runs
-// TypeScript code against typed tool APIs. Keeps edit as a direct tool.
+// Replaces Pi's tools with a single execute_tools tool that runs
+// TypeScript code against typed tool APIs.
 //
 // MCP integration:
 // - Tool metadata loaded from pi-mcp-adapter's cache (instant, no connections)
@@ -96,7 +96,7 @@ export default function codeMode(pi: ExtensionAPI) {
     }));
     buildSearchIndex(piTools, mcpClient);
 
-    // Activate code mode: only execute_tools + edit visible to LLM
+    // Activate code mode: only execute_tools visible to LLM
     activateCodeMode();
 
     ctx.ui.setStatus(
@@ -149,7 +149,7 @@ export default function codeMode(pi: ExtensionAPI) {
   // --- Helpers ---
 
   function activateCodeMode() {
-    pi.setActiveTools(["execute_tools", "edit"]);
+    pi.setActiveTools(["execute_tools"]);
     enabled = true;
   }
 

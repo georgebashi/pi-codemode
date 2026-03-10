@@ -138,7 +138,6 @@ print(found);
 ### Important
 - **Parallelize independent calls** — use \`Promise.all\` whenever calls don't depend on each other
 - **Chain dependent calls** — use the result of one call to determine what to call next
-- The \`edit\` tool is available directly (not through code) for precise file modifications with diff rendering
 - Both \`print()\` output and \`return\` values are included in the result
 - Type errors are caught before execution — fix them based on the error messages
 - Runtime errors are caught and returned — fix your code if you see one

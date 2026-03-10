@@ -43,6 +43,20 @@ interface BuiltinTools {
   }): Promise<void>;
 
   /**
+   * Edit a file by finding and replacing exact text.
+   * The oldText must match exactly (including whitespace).
+   * Returns a success message. Throws if text not found or ambiguous.
+   */
+  edit(params: {
+    /** Path to the file to edit (relative or absolute) */
+    path: string;
+    /** Exact text to find and replace (must match exactly) */
+    oldText: string;
+    /** New text to replace the old text with */
+    newText: string;
+  }): Promise<string>;
+
+  /**
    * Search for tools by name or description.
    * Returns matching tool names, descriptions, and call signatures.
    */

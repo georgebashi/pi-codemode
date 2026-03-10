@@ -40,8 +40,8 @@ export function buildSearchIndex(
       id: `pi:${tool.name}`,
       name: tool.name,
       description: tool.description ?? "",
-      source: tool.name === "edit" ? "pi (direct tool)" : "pi",
-      callSig: tool.name === "edit" ? "edit (direct tool)" : `tools.${tool.name}()`,
+      source: "pi",
+      callSig: `tools.${tool.name}()`,
       params: "",
     });
   }

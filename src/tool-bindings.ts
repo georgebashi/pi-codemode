@@ -13,6 +13,7 @@
 import {
   createReadTool,
   createWriteTool,
+  createEditTool,
 } from "@mariozechner/pi-coding-agent";
 import type { AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { McpClient } from "./mcp-client.js";
@@ -27,6 +28,12 @@ export interface ToolBindings {
   }): Promise<string>;
 
   write(params: { path: string; content: string }): Promise<void>;
+
+  edit(params: {
+    path: string;
+    oldText: string;
+    newText: string;
+  }): Promise<string>;
 
   search_tools(params: { query: string }): Promise<string>;
 
@@ -57,6 +64,7 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
   // Create fresh tool instances for the current cwd
   const readTool = createReadTool(cwd);
   const writeTool = createWriteTool(cwd);
+  const editTool = createEditTool(cwd);
 
   const toolCallId = `codemode-${Date.now()}`;
 
@@ -74,6 +82,16 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
     async write(params) {
       if (signal?.aborted) throw new Error("Execution cancelled");
       await writeTool.execute(toolCallId, params, signal);
+    },
+
+    async edit(params) {
+      if (signal?.aborted) throw new Error("Execution cancelled");
+      const result = await editTool.execute(toolCallId, params, signal);
+      const text = result.content
+        .filter((c): c is { type: "text"; text: string } => c.type === "text")
+        .map((c) => c.text)
+        .join("\n");
+      return text;
     },
 
     async search_tools(params) {
