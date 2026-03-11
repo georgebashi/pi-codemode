@@ -15,7 +15,7 @@ import type { PiToolInfo } from "./pi-tool-proxy.js";
 export function generateBuiltinTypeDefs(): string {
   return `\
 /** Tool API available inside execute_tools code blocks. */
-declare const tools: BuiltinTools & PiToolNamespace & McpNamespace;
+declare const tools: BuiltinTools;
 
 interface BuiltinTools {
   /**
@@ -163,22 +163,16 @@ declare const π: Readonly<Record<string, string>>;
  */
 export function generateMcpServerTypeDefs(servers: McpServerInfo[]): string {
   if (servers.length === 0) {
-    return `\
-/** No MCP servers are configured. */
-interface McpNamespace {}
-`;
+    return `/** No MCP servers configured. */\ndeclare const mcp: Record<string, never>;\n`;
   }
 
   const parts: string[] = [];
 
-  // Generate the McpNamespace wrapper: tools.mcp.<server>.<tool>()
-  parts.push(`interface McpNamespace {`);
-  parts.push(`  /** MCP servers */`);
-  parts.push(`  mcp: McpServers;`);
-  parts.push(`}`);
+  // Top-level global: mcp.<server>.<tool>()
+  parts.push(`/** MCP servers — call tools as mcp.<server>.<tool>(args) */`);
+  parts.push(`declare const mcp: McpServers;`);
   parts.push(``);
 
-  // Generate the McpServers interface with one property per server
   parts.push(`interface McpServers {`);
   for (const server of servers) {
     parts.push(`  /** MCP server: ${server.serverName} (${server.tools.length} tools) */`);
@@ -220,7 +214,7 @@ export function generateMcpSummaryForPrompt(servers: McpServerInfo[]): string {
   const lines: string[] = [];
   lines.push(`### MCP Servers`);
   lines.push(``);
-  lines.push(`The following MCP servers are available under \`tools.mcp\`.`);
+  lines.push(`The following MCP servers are available under the \`mcp\` global.`);
   lines.push(`Use \`describe_tools\` to browse tools in a namespace and see their parameters.`);
   lines.push(`Use \`search_tools\` to find tools by keyword across all servers.`);
   lines.push(``);
@@ -228,9 +222,9 @@ export function generateMcpSummaryForPrompt(servers: McpServerInfo[]): string {
   for (const server of servers) {
     const count = server.tools.length;
     if (count === 0) {
-      lines.push(`- **tools.mcp.${server.namespace}** — ${server.serverName} (connect on first call)`);
+      lines.push(`- **mcp.${server.namespace}** — ${server.serverName} (connect on first call)`);
     } else {
-      lines.push(`- **tools.mcp.${server.namespace}** — ${server.serverName} (${count} tools)`);
+      lines.push(`- **mcp.${server.namespace}** — ${server.serverName} (${count} tools)`);
     }
   }
 
@@ -263,8 +257,8 @@ export function generateToolSignature(
     ? jsonSchemaToTypeString(inputSchema, "")
     : "Record<string, unknown>";
   const argsOptional = !hasRequiredProperties(inputSchema);
-  // Pi tools use tools.pi.<tool>, MCP tools use tools.mcp.<namespace>.<tool>
-  const prefix = namespace === "pi" ? "tools.pi" : `tools.mcp.${namespace}`;
+  // Pi tools use pi.<tool>, MCP tools use mcp.<namespace>.<tool>
+  const prefix = namespace === "pi" ? "pi" : `mcp.${namespace}`;
   lines.push(`${prefix}.${toolName}(args${argsOptional ? "?" : ""}: ${paramsType}): Promise<string>`);
   return lines.join("\n");
 }
@@ -435,15 +429,13 @@ export function generatePackageTypeDefs(
  * Uses the same jsonSchemaToTypeString as MCP tools since TypeBox schemas are JSON Schema compatible.
  */
 export function generatePiToolsTypeDefs(piTools: PiToolInfo[]): string {
-  if (piTools.length === 0) return "interface PiToolNamespace {}\n";
+  if (piTools.length === 0) return "declare const pi: Record<string, never>;\n";
 
   const parts: string[] = [];
 
-  // Wrapper: tools.pi.<tool>()
-  parts.push(`interface PiToolNamespace {`);
-  parts.push(`  /** Pi extension tools (${piTools.length} tools) */`);
-  parts.push(`  pi: PiTools;`);
-  parts.push(`}`);
+  // Top-level global: pi.<tool>()
+  parts.push(`/** Pi extension tools — call as pi.<tool>(args) */`);
+  parts.push(`declare const pi: PiTools;`);
   parts.push(``);
 
   parts.push(`interface PiTools {`);
@@ -475,7 +467,7 @@ export function generatePiToolsSummaryForPrompt(piTools: PiToolInfo[]): string {
   const lines: string[] = [];
   lines.push(`### Pi Tools`);
   lines.push(``);
-  lines.push("Pi extension tools available as `tools.pi.<tool>(args)`.");
+  lines.push("Pi extension tools available as `pi.<tool>(args)`.");
   lines.push("Use `search_tools` to find tools or `describe_tools({ namespace: \"pi\" })` for details.");
   lines.push(``);
 
@@ -483,7 +475,7 @@ export function generatePiToolsSummaryForPrompt(piTools: PiToolInfo[]): string {
     const short = tool.description.length > 100
       ? tool.description.slice(0, 100) + "..."
       : tool.description;
-    lines.push(`- **tools.pi.${tool.name}** \u2014 ${short}`);
+    lines.push(`- **pi.${tool.name}** \u2014 ${short}`);
   }
 
   return lines.join("\n");

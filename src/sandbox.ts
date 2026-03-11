@@ -524,9 +524,15 @@ export async function executeCode(
     }
   };
 
+  // Extract mcp and pi namespaces as top-level globals (not under tools)
+  const { mcp: mcpBindings, pi: piBindings, ...toolsOnly } = bindings as any;
+
   const context = vm.createContext({
-    // Tool bindings
-    tools: bindings,
+    // Tool bindings (built-in tools only: read, write, edit, search_tools, etc.)
+    tools: toolsOnly,
+    // MCP and Pi tools as top-level globals
+    mcp: mcpBindings ?? {},
+    pi: piBindings ?? {},
     print: captureLog,
 
     // Console (captured)

@@ -111,7 +111,7 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
           return "No pi extension tools available.";
         }
         if (!params.tool) {
-          let text = `tools.pi — ${piToolsList.length} pi extension tools:\n\n`;
+          let text = `pi — ${piToolsList.length} pi extension tools:\n\n`;
           for (const t of piToolsList) {
             text += `  ${t.name}`;
             if (t.description) {
@@ -125,7 +125,7 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
         const tool = piToolsList.find((t) => t.name === params.tool);
         if (!tool) {
           const names = piToolsList.map((t) => t.name).join(", ");
-          return `Unknown tool "${params.tool}" in tools.pi. Available: ${names}`;
+          return `Unknown tool "${params.tool}" in pi. Available: ${names}`;
         }
         return generateToolSignature("pi", tool.name, tool.description, tool.inputSchema);
       }
@@ -144,9 +144,9 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
       if (!params.tool) {
         // List all tools in this namespace
         if (server.tools.length === 0) {
-          return `tools.mcp.${server.namespace} has no cached tools. Call any tool to trigger a connection.`;
+          return `mcp.${server.namespace} has no cached tools. Call any tool to trigger a connection.`;
         }
-        let text = `tools.mcp.${server.namespace} — ${server.tools.length} tools:\n\n`;
+        let text = `mcp.${server.namespace} — ${server.tools.length} tools:\n\n`;
         for (const t of server.tools) {
           text += `  ${t.name}`;
           if (t.description) {
@@ -161,7 +161,7 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
       const tool = server.tools.find((t) => t.name === params.tool);
       if (!tool) {
         const names = server.tools.map((t) => t.name).join(", ");
-        return `Unknown tool "${params.tool}" in tools.mcp.${server.namespace}. Available: ${names}`;
+        return `Unknown tool "${params.tool}" in mcp.${server.namespace}. Available: ${names}`;
       }
       return generateToolSignature(server.namespace, tool.name, tool.description, tool.inputSchema);
     },

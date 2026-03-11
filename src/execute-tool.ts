@@ -42,7 +42,8 @@ Available tools in code:
 - tools.read({ path }) → file content as string
 - tools.write({ path, content }) → void
 - tools.edit({ path, oldText, newText }) → find-and-replace in file
-- tools.mcp.<server>.<tool>(args) → call MCP tools (e.g., tools.mcp.slack.channels_me())
+- mcp.<server>.<tool>(args) → call MCP tools (e.g., mcp.slack.channels_me())
+- pi.<tool>(args) → call pi tools (e.g., pi.list_sessions(), pi.subagent())
 - tools.search_tools({ query }) → discover available tools
 - tools.progress(msg) → stream progress to UI
 - print(...) → output to include in result
@@ -55,7 +56,7 @@ Only use this tool when you need to perform I/O (read/write files, run commands,
     parameters: Type.Object({
       code: Type.String({
         description:
-          "TypeScript code body. Has access to tools.read(), tools.write(), tools.edit(), tools.mcp.<server>.<tool>() for MCP, tools.pi.<tool>() for pi tools, tools.search_tools(), print(), and tools.progress(). String constants from the 'strings' parameter are available as π.keyName. Use the strings parameter for file content and multi-line text — avoids escaping issues.",
+          "TypeScript code body. Has access to tools.read(), tools.write(), tools.edit(), mcp.<server>.<tool>() for MCP, pi.<tool>() for pi tools, tools.search_tools(), print(), and tools.progress(). String constants from the 'strings' parameter are available as π.keyName. Use the strings parameter for file content and multi-line text — avoids escaping issues.",
       }),
       strings: Type.Optional(Type.Record(Type.String(), Type.String(), {
         description:

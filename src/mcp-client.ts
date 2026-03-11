@@ -151,7 +151,7 @@ export function createMcpClient(): McpClient {
           // Enrich error with schema hints to help self-correction
           const info = servers.get(namespace)!;
           const toolInfo = info.tools.find((t) => t.name === toolName);
-          let errorMsg = `MCP tool error: tools.mcp.${namespace}.${toolName}()\n\n${text}`;
+          let errorMsg = `MCP tool error: mcp.${namespace}.${toolName}()\n\n${text}`;
           if (toolInfo) {
             errorMsg += `\n\nExpected signature:\n${generateToolSignature(namespace, toolName, toolInfo.description, toolInfo.inputSchema)}`;
           }
@@ -203,7 +203,7 @@ export function createMcpClient(): McpClient {
 
       let text = `Found ${matches.length} MCP tool${matches.length === 1 ? "" : "s"} matching "${query}":\n\n`;
       for (const m of matches) {
-        text += `tools.mcp.${m.namespace}.${m.tool}()\n`;
+        text += `mcp.${m.namespace}.${m.tool}()\n`;
         text += `  ${m.description || "(no description)"}\n\n`;
       }
       return text.trim();
