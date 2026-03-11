@@ -18,11 +18,14 @@ import {
   generateBuiltinTypeDefs,
   generateMcpServerTypeDefs,
   generateMcpSummaryForPrompt,
+  generatePackageTypeDefs,
 } from "./type-generator.js";
 import { generateSystemPromptAddition } from "./system-prompt.js";
 import { createExecuteTool } from "./execute-tool.js";
 import { createMcpClient, type McpClient } from "./mcp-client.js";
 import { buildSearchIndex } from "./search.js";
+import { loadUserPackages, type ResolvedPackage } from "./package-resolver.js";
+import { loadPackageTypes } from "./type-checker.js";
 
 export default function codeMode(pi: ExtensionAPI) {
   // --- Configuration ---
@@ -55,13 +58,35 @@ export default function codeMode(pi: ExtensionAPI) {
     console.warn(`Code Mode: MCP init failed: ${e.message}`);
   }
 
-  // Build type checker types: built-in + full MCP types from cache
+  // --- Load user-configured packages ---
+  // Reads ~/.pi/agent/codemode.json (global) and .pi/codemode.json (project),
+  // auto-installs into dedicated directories, and resolves modules.
+  let userPackages: ResolvedPackage[] = [];
+  let userPackageMap: Record<string, unknown> = {};
+  try {
+    const { packages, warnings } = loadUserPackages(process.cwd());
+    userPackages = packages;
+    userPackageMap = Object.fromEntries(packages.map(p => [p.varName, p.module]));
+    for (const w of warnings) {
+      console.warn(`Code Mode: ${w}`);
+    }
+    if (packages.length > 0) {
+      // Load type definitions for packages that have them
+      loadPackageTypes(packages);
+    }
+  } catch (e: any) {
+    console.warn(`Code Mode: Failed to load user packages: ${e.message}`);
+  }
+
+  // Build type checker types: built-in + full MCP types + user package types
   const mcpServers = mcpClient?.getServers() ?? [];
   const mcpTypeDefs = generateMcpServerTypeDefs(mcpServers);
-  const typeCheckerTypeDefs = builtinTypeDefs + "\n" + mcpTypeDefs;
+  const packageTypeDefs = generatePackageTypeDefs(userPackages);
+  const typeCheckerTypeDefs = builtinTypeDefs + "\n" + mcpTypeDefs + "\n" + packageTypeDefs;
 
   // Build system prompt summary: compact MCP listing (not full types)
   const mcpSummary = generateMcpSummaryForPrompt(mcpServers);
+  const userPackageNames = userPackages.map(p => p.varName);
 
   // --- Read shell command prefix from pi settings ---
   // This prefix (e.g., "export TERM=dumb CI=true ...") is prepended to every
@@ -83,6 +108,7 @@ export default function codeMode(pi: ExtensionAPI) {
       mcpClient,
     },
     shellPrefix,
+    userPackages: userPackageMap,
   });
 
   pi.registerTool(executeTool);
@@ -126,7 +152,7 @@ export default function codeMode(pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event) => {
     if (!enabled) return;
 
-    const addition = generateSystemPromptAddition(builtinTypeDefs, mcpSummary);
+    const addition = generateSystemPromptAddition(builtinTypeDefs, mcpSummary, userPackageNames);
     return {
       systemPrompt: event.systemPrompt + "\n\n" + addition,
     };

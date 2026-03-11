@@ -349,3 +349,34 @@ function safePropName(name: string): string {
   if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name)) return name;
   return JSON.stringify(name);
 }
+
+/**
+ * Generate TypeScript type declarations for user-configured packages.
+ *
+ * For packages with types: generates import + declare const referencing the real types.
+ * For packages without types: generates declare const as any.
+ */
+export function generatePackageTypeDefs(
+  packages: Array<{ specifier: string; varName: string; hasTypes: boolean }>
+): string {
+  if (packages.length === 0) return "";
+
+  const lines: string[] = [];
+  lines.push("// --- User-configured packages ---");
+  lines.push("");
+
+  for (const pkg of packages) {
+    if (pkg.hasTypes) {
+      // Import the real types so the type checker can validate usage
+      const importName = `_pkg_${sanitizeIdentifier(pkg.varName)}`;
+      lines.push(`import type * as ${importName} from '${pkg.specifier}';`);
+      lines.push(`declare const ${pkg.varName}: typeof ${importName};`);
+    } else {
+      // No types available — expose as any
+      lines.push(`declare const ${pkg.varName}: any;`);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}

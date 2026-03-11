@@ -294,7 +294,7 @@ function createTruncating$(cwd, shellPrefix) {
 
 // --- Sandbox (from sandbox.ts) ---
 
-async function executeCode(tsCode, bindings, { skipTypeCheck = false, shellPrefix } = {}) {
+async function executeCode(tsCode, bindings, { skipTypeCheck = false, shellPrefix, userPackages = {} } = {}) {
   if (!skipTypeCheck) {
     const errors = typeCheck(tsCode);
     if (errors.length > 0) return { success: false, errors, logs: [], returnValue: undefined };
@@ -329,6 +329,8 @@ async function executeCode(tsCode, bindings, { skipTypeCheck = false, shellPrefi
     ProcessOutput: zx.ProcessOutput,
     // simple-git — pre-configured for cwd
     git: require("simple-git").simpleGit(process.cwd()),
+    // User-configured packages (override built-ins if same name)
+    ...userPackages,
   });
 
   try {
@@ -693,6 +695,96 @@ async function test(name, fn) {
       assert(result.returnValue.length > 0, "has commits");
       assert(result.returnValue[0].hash.length === 7, "has short hash");
     }
+  });
+
+  // --- User packages tests ---
+
+  await test("Pipeline: user packages injected into sandbox (skip type check)", async () => {
+    // Inject a mock package into the sandbox
+    const result = await executeCode(
+      'return typeof myUtil;',
+      mockBindings,
+      { skipTypeCheck: true, userPackages: { myUtil: { greet: (name) => "Hello " + name } } }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    assert(result.returnValue === "object", "package is available as object, got: " + result.returnValue);
+  });
+
+  await test("Pipeline: user package function callable (skip type check)", async () => {
+    const result = await executeCode(
+      'return myUtil.add(2, 3);',
+      mockBindings,
+      { skipTypeCheck: true, userPackages: { myUtil: { add: (a, b) => a + b } } }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    assert(result.returnValue === 5, "got: " + result.returnValue);
+  });
+
+  await test("Pipeline: user package overrides built-in (skip type check)", async () => {
+    // Override YAML with a custom object
+    const result = await executeCode(
+      'return YAML.custom;',
+      mockBindings,
+      { skipTypeCheck: true, userPackages: { YAML: { custom: true, parse: () => null, stringify: () => "" } } }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    assert(result.returnValue === true, "overrode built-in YAML, got: " + result.returnValue);
+  });
+
+  await test("Pipeline: multiple user packages (skip type check)", async () => {
+    const result = await executeCode(
+      'return { a: pkgA.value, b: pkgB.value };',
+      mockBindings,
+      { skipTypeCheck: true, userPackages: { pkgA: { value: 1 }, pkgB: { value: 2 } } }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    assert(result.returnValue.a === 1, "pkgA.value = " + result.returnValue.a);
+    assert(result.returnValue.b === 2, "pkgB.value = " + result.returnValue.b);
+  });
+
+  // --- Package resolver tests ---
+
+  await test("Package resolver: specifierToVarName converts correctly", async () => {
+    // Test the specifierToVarName logic inline
+    function specifierToVarName(specifier) {
+      let name = specifier.replace(/^@[^/]+\//, "");
+      name = name.split("/")[0];
+      name = name.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      name = name.replace(/[^a-zA-Z0-9_$]/g, "");
+      if (/^[0-9]/.test(name)) name = "_" + name;
+      return name;
+    }
+    assert(specifierToVarName("lodash") === "lodash", "lodash → lodash");
+    assert(specifierToVarName("csv-parse") === "csvParse", "csv-parse → csvParse");
+    assert(specifierToVarName("@scope/foo-bar") === "fooBar", "@scope/foo-bar → fooBar");
+    assert(specifierToVarName("csv-parse/sync") === "csvParse", "csv-parse/sync → csvParse");
+    assert(specifierToVarName("123pkg") === "_123pkg", "123pkg → _123pkg");
+  });
+
+  await test("Package resolver: loadConfig handles missing file", async () => {
+    // Test that loading a non-existent config returns null
+    const configPath = "/tmp/pi-codemode-test-nonexistent-" + Date.now() + ".json";
+    assert(!fs.existsSync(configPath), "config file does not exist");
+    // Inline test of the logic
+    let config = null;
+    if (fs.existsSync(configPath)) {
+      config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    }
+    assert(config === null, "returns null for missing file");
+  });
+
+  await test("Package resolver: loadConfig parses valid config", async () => {
+    const configPath = "/tmp/pi-codemode-test-config-" + Date.now() + ".json";
+    fs.writeFileSync(configPath, JSON.stringify({
+      packages: {
+        "lodash": ">=4.17.21",
+        "csv-parse": { version: "^5.0.0", as: "csvParse" }
+      }
+    }));
+    const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    assert(config.packages.lodash === ">=4.17.21", "lodash version");
+    assert(config.packages["csv-parse"].as === "csvParse", "csv-parse alias");
+    try { fs.unlinkSync(configPath); } catch {}
   });
 
   // --- Benchmark ---

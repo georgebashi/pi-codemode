@@ -48,6 +48,8 @@ export interface SandboxOptions {
   onUpdate?: (update: { content: Array<{ type: string; text: string }>; details?: any }) => void;
   /** Shell command prefix prepended to every $ command (from pi's shellCommandPrefix setting) */
   shellPrefix?: string;
+  /** User-configured packages to inject as globals (varName → module) */
+  userPackages?: Record<string, unknown>;
 }
 
 const DEFAULT_TIMEOUT = 120_000;
@@ -458,6 +460,7 @@ export async function executeCode(
   const signal = options?.signal;
   const onUpdate = options?.onUpdate;
   const shellPrefix = options?.shellPrefix;
+  const userPackages = options?.userPackages ?? {};
 
   // Set zx's working directory for this execution
   zx.$.cwd = cwd;
@@ -595,6 +598,9 @@ export async function executeCode(
 
     // simple-git — pre-configured for the working directory
     git: simpleGit(cwd),
+
+    // User-configured packages (override built-ins if same name)
+    ...userPackages,
   });
 
   // Step 4: Execute in vm

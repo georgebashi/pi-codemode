@@ -139,6 +139,66 @@ export function initTypeChecker(): void {
 
 }
 
+/**
+ * Load additional package type definitions into the virtual file system.
+ * Called after initTypeChecker() to add user-configured packages.
+ *
+ * For each package, loads .d.ts files from either:
+ * - The package's own types (package.json "types"/"typings" field)
+ * - @types/<package> from the same node_modules
+ */
+export function loadPackageTypes(packages: Array<{
+  specifier: string;
+  packageDir: string;
+  hasTypes: boolean;
+}>): void {
+  if (!sourceFiles) initTypeChecker();
+
+  for (const pkg of packages) {
+    if (!pkg.hasTypes) continue;
+
+    const nodeModulesDir = pathReal.dirname(pkg.packageDir);
+
+    // Try loading the package's own types
+    const pkgJsonPath = pathReal.join(pkg.packageDir, "package.json");
+    if (fsReal.existsSync(pkgJsonPath)) {
+      try {
+        const pkgJson = JSON.parse(fsReal.readFileSync(pkgJsonPath, "utf-8"));
+        if (pkgJson.types || pkgJson.typings) {
+          // Package has its own type definitions — load the whole package dir
+          const prefix = "node_modules/" + getPackageName(pkg.specifier);
+          loadPackageDir(pkg.packageDir, prefix);
+          continue; // Don't also load @types
+        }
+      } catch {}
+    }
+
+    // Try loading @types/<package>
+    const baseName = pkg.specifier.startsWith("@")
+      ? pkg.specifier.replace("@", "").replace("/", "__")
+      : pkg.specifier.split("/")[0];
+    const typesDir = pathReal.join(nodeModulesDir, "@types", baseName);
+    if (fsReal.existsSync(typesDir)) {
+      const prefix = "node_modules/@types/" + baseName;
+      loadPackageDir(typesDir, prefix);
+    }
+  }
+}
+
+/**
+ * Get the package name from a specifier (handles scoped packages).
+ * "lodash" → "lodash"
+ * "@scope/pkg" → "@scope/pkg"
+ * "csv-parse/sync" → "csv-parse"
+ */
+function getPackageName(specifier: string): string {
+  if (specifier.startsWith("@")) {
+    const parts = specifier.split("/");
+    return parts.slice(0, 2).join("/");
+  }
+  return specifier.split("/")[0];
+}
+
 /** Add a file to the virtual file system. */
 function addFile(virtualPath: string, content: string): void {
   fileContent!.set(virtualPath, content);

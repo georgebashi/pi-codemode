@@ -13,10 +13,12 @@
  *
  * @param builtinTypeDefs - TypeScript type declarations for built-in tools only
  * @param mcpSummary - Compact MCP server summary (namespace names only)
+ * @param userPackageNames - Variable names of user-configured packages
  */
 export function generateSystemPromptAddition(
   builtinTypeDefs: string,
-  mcpSummary: string
+  mcpSummary: string,
+  userPackageNames?: string[]
 ): string {
   return `\
 ## Code Mode
@@ -165,7 +167,7 @@ print(found);
 
 - \`JSON.parse()\` / \`JSON.stringify()\` — parse and serialize JSON
 - \`YAML.parse()\` / \`YAML.stringify()\` — parse and serialize YAML
-
+${userPackageNames && userPackageNames.length > 0 ? '\n### Additional Packages\n\nAvailable as globals: \`' + userPackageNames.join('\`, \`') + '\`\n' : ''}
 ### Important
 - **Use \`git\` for all git operations** — a pre-configured simple-git instance is available (e.g., \`await git.status()\`, \`await git.log()\`, \`await git.add('.')\`, \`await git.commit('msg')\`)
 - **Parallelize independent calls** — use \`Promise.all\` whenever calls don't depend on each other
