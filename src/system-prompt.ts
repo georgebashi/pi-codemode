@@ -105,6 +105,37 @@ const counts = await Promise.all(
 );
 return counts.filter(c => c.count > 0);
 \`\`\`
+
+#### Error handling — try/catch for graceful recovery
+
+\`\`\`typescript
+// Try an operation, fall back gracefully on error
+let config: Record<string, unknown>;
+try {
+  const raw = await tools.read({ path: "config.json" });
+  config = JSON.parse(raw);
+} catch {
+  config = { defaults: true };
+  print("No config found, using defaults");
+}
+return config;
+\`\`\`
+
+#### Fault-tolerant parallel — Promise.allSettled
+
+\`\`\`typescript
+// Fetch from multiple sources — don't fail if some are unavailable
+const urls = ["service-a", "service-b", "service-c"];
+const results = await Promise.allSettled(
+  urls.map(u => $\`curl -sf http://\${u}/health\`)
+);
+const report = results.map((r, i) => ({
+  service: urls[i],
+  status: r.status,
+  output: r.status === "fulfilled" ? r.value.stdout.trim() : r.reason.message,
+}));
+return report;
+\`\`\`
 ${mcpSummary ? `
 ${mcpSummary}
 
