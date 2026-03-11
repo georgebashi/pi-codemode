@@ -45,14 +45,18 @@ export function buildSearchIndex(
   docs = [];
 
   // Index Pi tools
+  // Core tools (read, write, edit) use tools.<name>() directly.
+  // Extension tools (list_sessions, subagent, etc.) use tools.pi.<name>().
+  const coreTools = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
   for (const tool of piTools) {
-    if (tool.name === "execute_tools") continue;
+    if (tool.name === "execute_tools" || tool.name === "mcp") continue;
+    const isCore = coreTools.has(tool.name);
     docs.push({
       id: `pi:${tool.name}`,
       name: tool.name,
       description: tool.description ?? "",
-      source: "pi",
-      callSig: `tools.${tool.name}()`,
+      source: isCore ? "pi" : "pi",
+      callSig: isCore ? `tools.${tool.name}()` : `tools.pi.${tool.name}()`,
       params: "",
     });
   }

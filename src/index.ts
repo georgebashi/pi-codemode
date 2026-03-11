@@ -18,6 +18,8 @@ import {
   generateBuiltinTypeDefs,
   generateMcpServerTypeDefs,
   generateMcpSummaryForPrompt,
+  generatePiToolsTypeDefs,
+  generatePiToolsSummaryForPrompt,
   generatePackageTypeDefs,
 } from "./type-generator.js";
 import { generateSystemPromptAddition } from "./system-prompt.js";
@@ -26,8 +28,13 @@ import { createMcpClient, type McpClient } from "./mcp-client.js";
 import { buildSearchIndex } from "./search.js";
 import { loadUserPackages, type ResolvedPackage } from "./package-resolver.js";
 import { loadPackageTypes } from "./type-checker.js";
+import { patchExtensionRunner, getProxiedPiTools, type PiToolInfo } from "./pi-tool-proxy.js";
 
 export default function codeMode(pi: ExtensionAPI) {
+  // --- Monkeypatch ExtensionRunner to enable pi tool proxying ---
+  // Must be called before any session starts.
+  patchExtensionRunner();
+
   // --- Configuration ---
 
   pi.registerFlag("no-codemode", {
@@ -42,6 +49,7 @@ export default function codeMode(pi: ExtensionAPI) {
   let originalTools: string[] = [];
   const builtinTypeDefs = generateBuiltinTypeDefs();
   let mcpClient: McpClient | undefined;
+  let piTools: PiToolInfo[] = [];
 
   // Initialize the TypeScript type checker (pre-loads lib files, ~50ms)
   initTypeChecker();
@@ -79,14 +87,20 @@ export default function codeMode(pi: ExtensionAPI) {
   }
 
   // Build type checker types: built-in + full MCP types + user package types
+  // Pi tools are added later in session_start when the runner is captured.
   const mcpServers = mcpClient?.getServers() ?? [];
-  const mcpTypeDefs = generateMcpServerTypeDefs(mcpServers);
   const packageTypeDefs = generatePackageTypeDefs(userPackages);
-  const typeCheckerTypeDefs = builtinTypeDefs + "\n" + mcpTypeDefs + "\n" + packageTypeDefs;
+  const userPackageInfo = userPackages.map(p => ({ varName: p.varName, specifier: p.specifier, description: p.description, hint: p.hint }));
+
+  /** Rebuild type checker type defs. Called at init and after pi tools are discovered. */
+  function rebuildTypeDefs(): string {
+    const mcpTypeDefs = generateMcpServerTypeDefs(mcpServers, piTools);
+    const piTypeDefs = generatePiToolsTypeDefs(piTools);
+    return builtinTypeDefs + "\n" + mcpTypeDefs + "\n" + piTypeDefs + "\n" + packageTypeDefs;
+  }
 
   // Build system prompt summary: compact MCP listing (not full types)
   const mcpSummary = generateMcpSummaryForPrompt(mcpServers);
-  const userPackageInfo = userPackages.map(p => ({ varName: p.varName, specifier: p.specifier, description: p.description, hint: p.hint }));
 
   // --- Read shell command prefix from pi settings ---
   // This prefix (e.g., "export TERM=dumb CI=true ...") is prepended to every
@@ -100,16 +114,19 @@ export default function codeMode(pi: ExtensionAPI) {
   }
 
   // --- Register the execute_tools tool ---
+  // Options are mutable — updated in session_start when pi tools are discovered.
 
-  const executeTool = createExecuteTool({
-    typeDefs: typeCheckerTypeDefs,
+  const executeToolOptions: Parameters<typeof createExecuteTool>[0] = {
+    typeDefs: rebuildTypeDefs(),
     bindingsOptions: {
       cwd: process.cwd(),
       mcpClient,
     },
     shellPrefix,
     userPackages: userPackageMap,
-  });
+  };
+
+  const executeTool = createExecuteTool(executeToolOptions);
 
   pi.registerTool(executeTool);
 
@@ -126,12 +143,26 @@ export default function codeMode(pi: ExtensionAPI) {
     // Store original tool set for toggling
     originalTools = pi.getActiveTools();
 
+    // --- Discover pi extension tools via monkeypatched runner ---
+    // The runner was captured by patchExtensionRunner() during createContext().
+    // getProxiedPiTools() returns tools registered by other extensions
+    // (list_sessions, subagent, save_memory, web_search, etc.)
+    piTools = getProxiedPiTools();
+    if (piTools.length > 0) {
+      // Update execute_tools config with pi tools
+      executeToolOptions.typeDefs = rebuildTypeDefs();
+      executeToolOptions.bindingsOptions = {
+        ...executeToolOptions.bindingsOptions,
+        piTools,
+      };
+    }
+
     // Build FTS index over all Pi tools + MCP tools
-    const piTools = pi.getAllTools().map((t) => ({
+    const allPiTools = pi.getAllTools().map((t) => ({
       name: t.name,
       description: t.description,
     }));
-    buildSearchIndex(piTools, mcpClient, userPackages.map(p => ({
+    buildSearchIndex(allPiTools, mcpClient, userPackages.map(p => ({
       varName: p.varName,
       specifier: p.specifier,
       description: p.description,
@@ -139,8 +170,6 @@ export default function codeMode(pi: ExtensionAPI) {
 
     // Activate code mode: only execute_tools visible to LLM
     activateCodeMode();
-
-
   });
 
   // --- Shutdown ---
@@ -156,7 +185,8 @@ export default function codeMode(pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event) => {
     if (!enabled) return;
 
-    const addition = generateSystemPromptAddition(builtinTypeDefs, mcpSummary, userPackageInfo);
+    const piToolsSummary = generatePiToolsSummaryForPrompt(piTools);
+    const addition = generateSystemPromptAddition(builtinTypeDefs, mcpSummary, userPackageInfo, piToolsSummary);
     return {
       systemPrompt: event.systemPrompt + "\n\n" + addition,
     };

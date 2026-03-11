@@ -4,6 +4,7 @@
 // - read → string (the file content)
 // - write → void
 // - tools.<server>.<tool>(args) → string (MCP tools as per-server namespaces)
+// - tools.pi.<tool>(args) → string (pi extension tools proxied via monkeypatch)
 // - search_tools → string (FTS via MiniSearch)
 // - progress → void (streams to UI)
 //
@@ -19,6 +20,7 @@ import type { AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { McpClient } from "./mcp-client.js";
 import { searchTools } from "./search.js";
 import { generateToolSignature } from "./type-generator.js";
+import { callPiTool, type PiToolInfo } from "./pi-tool-proxy.js";
 
 /** The shape the sandbox code sees at runtime — base tools */
 export interface ToolBindings {
@@ -50,6 +52,8 @@ export interface ToolBindingsOptions {
   cwd: string;
   /** MCP client for proxying MCP tool calls */
   mcpClient?: McpClient;
+  /** Pi extension tools available for proxying */
+  piTools?: PiToolInfo[];
   /** Abort signal for cancellation */
   signal?: AbortSignal;
   /** Callback for streaming progress to the UI */
@@ -100,13 +104,41 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
     },
 
     async describe_tools(params) {
+      // Handle "pi" namespace for proxied pi extension tools
+      if (params.namespace === "pi") {
+        const piToolsList = options.piTools ?? [];
+        if (piToolsList.length === 0) {
+          return "No pi extension tools available.";
+        }
+        if (!params.tool) {
+          let text = `tools.pi — ${piToolsList.length} pi extension tools:\n\n`;
+          for (const t of piToolsList) {
+            text += `  ${t.name}`;
+            if (t.description) {
+              const short = t.description.length > 120 ? t.description.slice(0, 120) + "..." : t.description;
+              text += ` — ${short}`;
+            }
+            text += "\n";
+          }
+          return text.trimEnd();
+        }
+        const tool = piToolsList.find((t) => t.name === params.tool);
+        if (!tool) {
+          const names = piToolsList.map((t) => t.name).join(", ");
+          return `Unknown tool "${params.tool}" in tools.pi. Available: ${names}`;
+        }
+        return generateToolSignature("pi", tool.name, tool.description, tool.inputSchema);
+      }
+
       if (!mcpClient?.available) {
         return "No MCP servers available.";
       }
       const servers = mcpClient.getServers();
       const server = servers.find((s) => s.namespace === params.namespace);
       if (!server) {
-        const available = servers.map((s) => s.namespace).join(", ");
+        const mcpNamespaces = servers.map((s) => s.namespace);
+        if (options.piTools?.length) mcpNamespaces.push("pi");
+        const available = mcpNamespaces.join(", ");
         return `Unknown namespace "${params.namespace}". Available: ${available}`;
       }
       if (!params.tool) {
@@ -170,6 +202,31 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
         },
       });
     }
+  }
+
+  // Add pi tool namespace for extension-registered tools
+  // e.g., tools.pi.list_sessions({ scope: "all" })
+  // These are pi tools that code mode doesn't handle directly.
+  if (options.piTools && options.piTools.length > 0) {
+    const piProxy: Record<string, (args?: Record<string, unknown>) => Promise<string>> = {};
+
+    for (const tool of options.piTools) {
+      piProxy[tool.name] = async (args?: Record<string, unknown>) => {
+        if (signal?.aborted) throw new Error("Execution cancelled");
+        return callPiTool(tool.name, args ?? {}, signal);
+      };
+    }
+
+    // Proxy fallback for tools that may not be in the cached list
+    bindings["pi"] = new Proxy(piProxy, {
+      get(target, prop: string) {
+        if (prop in target) return target[prop];
+        return async (args?: Record<string, unknown>) => {
+          if (signal?.aborted) throw new Error("Execution cancelled");
+          return callPiTool(prop, args ?? {}, signal);
+        };
+      },
+    });
   }
 
   return bindings;

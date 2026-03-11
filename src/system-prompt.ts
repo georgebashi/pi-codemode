@@ -22,11 +22,13 @@ interface PackageInfo {
  * @param builtinTypeDefs - TypeScript type declarations for built-in tools only
  * @param mcpSummary - Compact MCP server summary (namespace names only)
  * @param userPackages - User-configured packages with descriptions
+ * @param piToolsSummary - Compact pi extension tools summary
  */
 export function generateSystemPromptAddition(
   builtinTypeDefs: string,
   mcpSummary: string,
-  userPackages?: PackageInfo[]
+  userPackages?: PackageInfo[],
+  piToolsSummary?: string
 ): string {
   return `\
 ## Code Mode
@@ -171,6 +173,9 @@ const found = await tools.search_tools({ query: "slack direct messages" });
 print(found);
 \`\`\`
 ` : ""}
+${piToolsSummary ? `
+${piToolsSummary}
+` : ""}
 ### Utilities
 
 - \`JSON.parse()\` / \`JSON.stringify()\` — parse and serialize JSON
@@ -198,5 +203,9 @@ like paths and single-line messages.
 - Both \`print()\` output and \`return\` values are included in the result
 - Type errors are caught before execution — fix them based on the error messages
 - Runtime errors are caught and returned — fix your code if you see one
+- **Don't use \`execute_tools\` just to display text** — if you want to explain something,
+  write it as a normal response. Only use \`execute_tools\` when you need to perform I/O
+  (read/write files, run commands, call tools). Comments and print statements in code
+  should support the I/O work, not replace a normal text response.
 `;
 }

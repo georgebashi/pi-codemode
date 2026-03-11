@@ -6,6 +6,7 @@
 // 3. MCP server summary — compact server/tool listing (for system prompt)
 
 import type { McpServerInfo } from "./mcp-client.js";
+import type { PiToolInfo } from "./pi-tool-proxy.js";
 
 /**
  * Generate the type definition string for built-in tools.
@@ -160,8 +161,11 @@ declare const π: Readonly<Record<string, string>>;
  * Used by the TYPE CHECKER — includes all tool signatures from inputSchema.
  * This is NOT injected into the system prompt (too large).
  */
-export function generateMcpServerTypeDefs(servers: McpServerInfo[]): string {
-  if (servers.length === 0) {
+export function generateMcpServerTypeDefs(servers: McpServerInfo[], piTools?: PiToolInfo[]): string {
+  const hasMcp = servers.length > 0;
+  const hasPi = piTools && piTools.length > 0;
+
+  if (!hasMcp && !hasPi) {
     return `\
 /** No MCP servers are configured. */
 interface McpServerNamespaces {}
@@ -175,6 +179,10 @@ interface McpServerNamespaces {}
   for (const server of servers) {
     parts.push(`  /** MCP server: ${server.serverName} (${server.tools.length} tools) */`);
     parts.push(`  ${server.namespace}: ${serverInterfaceName(server.namespace)};`);
+  }
+  if (hasPi) {
+    parts.push(`  /** Pi extension tools (${piTools!.length} tools) */`);
+    parts.push(`  pi: McpPiTools;`);
   }
   parts.push(`}`);
   parts.push(``);
@@ -415,6 +423,58 @@ export function generatePackageTypeDefs(
       lines.push(`declare const ${pkg.varName}: any;`);
     }
     lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Generate TypeScript declarations for proxied pi tools.
+ * These appear as tools.pi.<toolName>(args) in the sandbox.
+ * Uses the same jsonSchemaToTypeString as MCP tools since TypeBox schemas are JSON Schema compatible.
+ */
+export function generatePiToolsTypeDefs(piTools: PiToolInfo[]): string {
+  if (piTools.length === 0) return "";
+
+  const parts: string[] = [];
+  parts.push(`interface McpPiTools {`);
+
+  for (const tool of piTools) {
+    if (tool.description) {
+      const desc = tool.description.replace(/\*\//g, "* /").replace(/\n/g, " ");
+      parts.push(`  /** ${desc} */`);
+    }
+    const paramsType = tool.inputSchema
+      ? jsonSchemaToTypeString(tool.inputSchema, "  ")
+      : "Record<string, unknown>";
+    const argsOptional = !hasRequiredProperties(tool.inputSchema);
+    const safeName = safePropName(tool.name);
+    parts.push(`  ${safeName}(args${argsOptional ? "?" : ""}: ${paramsType}): Promise<string>;`);
+  }
+
+  parts.push(`}`);
+  parts.push(``);
+  return parts.join("\n");
+}
+
+/**
+ * Generate a compact pi tools summary for the system prompt.
+ */
+export function generatePiToolsSummaryForPrompt(piTools: PiToolInfo[]): string {
+  if (piTools.length === 0) return "";
+
+  const lines: string[] = [];
+  lines.push(`### Pi Tools`);
+  lines.push(``);
+  lines.push("Pi extension tools available as `tools.pi.<tool>(args)`.");
+  lines.push("Use `search_tools` to find tools or `describe_tools({ namespace: \"pi\" })` for details.");
+  lines.push(``);
+
+  for (const tool of piTools) {
+    const short = tool.description.length > 100
+      ? tool.description.slice(0, 100) + "..."
+      : tool.description;
+    lines.push(`- **tools.pi.${tool.name}** \u2014 ${short}`);
   }
 
   return lines.join("\n");

@@ -29,7 +29,8 @@ export interface ExecuteToolOptions {
 export function createExecuteTool(
   options: ExecuteToolOptions
 ): ToolDefinition {
-  const { typeDefs, bindingsOptions, timeout, maxOutputSize, shellPrefix, userPackages } = options;
+  // Read from options at execution time, not creation time.
+  // This allows index.ts to update piTools, typeDefs etc. after session_start.
 
   return {
     name: "execute_tools",
@@ -47,7 +48,9 @@ Available tools in code:
 - print(...) → output to include in result
 - π.keyName → string constants from the 'strings' parameter (use for file content, edits, multi-line text)
 
-Return a value to include it in the result. Type errors are returned for correction.`,
+Return a value to include it in the result. Type errors are returned for correction.
+
+Only use this tool when you need to perform I/O (read/write files, run commands, call tools). Don't use it just to display text — write that as a normal response instead.`,
 
     parameters: Type.Object({
       code: Type.String({
@@ -67,6 +70,9 @@ Return a value to include it in the result. Type errors are returned for correct
       onUpdate: any,
       ctx: ExtensionContext
     ) {
+      // Read from options at execution time so updates from session_start take effect
+      const { typeDefs, bindingsOptions, timeout, maxOutputSize, shellPrefix, userPackages } = options;
+
       const bindings = createToolBindings({
         ...bindingsOptions,
         signal,
@@ -201,11 +207,12 @@ Return a value to include it in the result. Type errors are returned for correct
       // Success — trim to avoid leading/trailing blank lines
       const text = (result.content?.[0]?.text ?? "(no output)").trim();
       const lineCount = text.split("\n").length;
+      const separator = theme.fg("success", "✓") + " " + theme.fg("dim", "─".repeat(78));
 
       if (!expanded && lineCount > 5) {
         const preview = text.split("\n").slice(0, 3).join("\n");
         return new Text(
-          theme.fg("success", "✓ ") +
+          separator + "\n" +
             preview +
             theme.fg("dim", `\n... ${lineCount - 3} more lines`) +
             elapsed,
@@ -215,7 +222,7 @@ Return a value to include it in the result. Type errors are returned for correct
       }
 
       return new Text(
-        theme.fg("success", "✓ ") + text + elapsed,
+        separator + "\n" + text + elapsed,
         0,
         0
       );
