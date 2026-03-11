@@ -178,9 +178,9 @@ print(found);
 ${userPackages && userPackages.length > 0 ? '\n### Additional Packages\n\nThe following npm packages are available as globals in the sandbox. Use them directly — they are not tools, just regular JavaScript libraries.\n\n' + userPackages.map(p => '- \`' + p.varName + '\` — ' + p.description + ' (npm: ' + p.specifier + ')' + (p.hint ? ' — \`' + p.hint + '\`' : '')).join('\n') + '\n' : ''}
 ### String Constants (π — the \`strings\` parameter)
 
-When writing or editing files with content that's hard to quote in JavaScript (backticks,
-\`\${}\` expressions, nested quotes, code blocks), pass the content via the \`strings\`
-parameter instead of embedding it in your code. The strings are available as \`π.keyName\`.
+When writing or editing files, **pass the content via the \`strings\` parameter** instead
+of embedding it in your code. The strings are available as \`π.keyName\`. This avoids
+JS escaping issues and keeps your code clean.
 
 \`\`\`typescript
 // Pass file content via the strings parameter — only JSON escaping needed:
@@ -188,10 +188,9 @@ await tools.write({ path: "run.sh", content: π.script });
 await tools.edit({ path: "config.ts", oldText: π.oldConfig, newText: π.newConfig });
 \`\`\`
 
-**When to use \`strings\`:** File content with backticks, template literals, shell scripts,
-code that contains string literals, or any text where JS quoting would be awkward.
-
-**When NOT needed:** Simple strings, paths, short text without special characters.
+**Always use \`strings\` for:** file content, multi-line text, code, templates, anything
+with quotes or special characters. Only use inline strings for short simple values
+like paths and single-line messages.
 
 ### Important
 - **Parallelize independent calls** — use \`Promise.all\` whenever calls don't depend on each other

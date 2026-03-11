@@ -45,18 +45,18 @@ Available tools in code:
 - tools.search_tools({ query }) → discover available tools
 - tools.progress(msg) → stream progress to UI
 - print(...) → output to include in result
-- π.keyName → string constants from the 'strings' parameter
+- π.keyName → string constants from the 'strings' parameter (use for file content, edits, multi-line text)
 
 Return a value to include it in the result. Type errors are returned for correction.`,
 
     parameters: Type.Object({
       code: Type.String({
         description:
-          "TypeScript code body. Has access to tools.read(), tools.write(), tools.edit(), tools.<server>.<tool>() for MCP, tools.search_tools(), print(), and tools.progress(). String constants from the 'strings' parameter are available as π.keyName.",
+          "TypeScript code body. Has access to tools.read(), tools.write(), tools.edit(), tools.<server>.<tool>() for MCP, tools.search_tools(), print(), and tools.progress(). String constants from the 'strings' parameter are available as π.keyName. Use the strings parameter for file content and multi-line text — avoids escaping issues.",
       }),
       strings: Type.Optional(Type.Record(Type.String(), Type.String(), {
         description:
-          "Named string constants injected into the code as π.keyName. Use this for file content, templates, or any text that would be hard to quote inside JavaScript code. The strings only need standard JSON escaping — no JS string literal escaping required.",
+          "Named string constants injected into the code as π.keyName. Use this for file content, templates, or any text that would be hard to quote inside JavaScript code. The strings only need standard JSON escaping \u2014 no JS string literal escaping required.",
       })),
     }),
 
