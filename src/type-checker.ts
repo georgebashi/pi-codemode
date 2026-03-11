@@ -163,7 +163,7 @@ export function loadPackageTypes(packages: Array<{
     if (fsReal.existsSync(pkgJsonPath)) {
       try {
         const pkgJson = JSON.parse(fsReal.readFileSync(pkgJsonPath, "utf-8"));
-        if (pkgJson.types || pkgJson.typings) {
+        if (pkgJson.types || pkgJson.typings || pkgJson.exports?.["."]?.types) {
           // Package has its own type definitions — load the whole package dir
           const prefix = "node_modules/" + getPackageName(pkg.specifier);
           loadPackageDir(pkg.packageDir, prefix);

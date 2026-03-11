@@ -289,12 +289,14 @@ function findPackageDir(specifier: string, nodeModulesDir: string): string | nul
  * Check if a package has TypeScript type definitions available.
  */
 function packageHasTypes(specifier: string, pkgDir: string, nodeModulesDir: string): boolean {
-  // Check the package's own types/typings field
+  // Check the package's own types/typings field (top-level or exports["."].types)
   const pkgJsonPath = pathReal.join(pkgDir, "package.json");
   if (fsReal.existsSync(pkgJsonPath)) {
     try {
       const pkgJson = JSON.parse(fsReal.readFileSync(pkgJsonPath, "utf-8"));
       if (pkgJson.types || pkgJson.typings) return true;
+      // Modern packages use exports["."].types (e.g., yaml, csv-parse)
+      if (pkgJson.exports?.["."]?.types) return true;
     } catch {}
   }
 
