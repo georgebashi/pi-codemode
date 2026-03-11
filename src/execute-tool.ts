@@ -17,6 +17,8 @@ export interface ExecuteToolOptions {
   timeout?: number;
   /** Max output size in bytes */
   maxOutputSize?: number;
+  /** Shell command prefix prepended to every $ command (from pi's shellCommandPrefix setting) */
+  shellPrefix?: string;
 }
 
 /**
@@ -25,7 +27,7 @@ export interface ExecuteToolOptions {
 export function createExecuteTool(
   options: ExecuteToolOptions
 ): ToolDefinition {
-  const { typeDefs, bindingsOptions, timeout, maxOutputSize } = options;
+  const { typeDefs, bindingsOptions, timeout, maxOutputSize, shellPrefix } = options;
 
   return {
     name: "execute_tools",
@@ -68,7 +70,7 @@ Return a value to include it in the result. Type errors are returned for correct
         params.code,
         typeDefs,
         bindings,
-        { timeout, maxOutputSize, cwd: bindingsOptions.cwd, signal, onUpdate }
+        { timeout, maxOutputSize, cwd: bindingsOptions.cwd, signal, onUpdate, shellPrefix }
       );
 
       if (!result.success) {

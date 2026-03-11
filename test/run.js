@@ -208,8 +208,13 @@ function truncateProcessOutput(output) {
   });
 }
 
-function createTruncating$(cwd) {
-  const base$ = zx.$({ cwd });
+function createTruncating$(cwd, shellPrefix) {
+  const opts = { cwd };
+  if (shellPrefix) {
+    const normalized = shellPrefix.trimEnd().replace(/;$/, "");
+    opts.prefix = "set -euo pipefail; " + normalized + "; ";
+  }
+  const base$ = zx.$(opts);
   const wrapped = function(pieces, ...args) {
     const proc = base$(pieces, ...args);
     const origThen = proc.then.bind(proc);
@@ -233,7 +238,7 @@ function createTruncating$(cwd) {
 
 // --- Sandbox (from sandbox.ts) ---
 
-async function executeCode(tsCode, bindings, { skipTypeCheck = false } = {}) {
+async function executeCode(tsCode, bindings, { skipTypeCheck = false, shellPrefix } = {}) {
   if (!skipTypeCheck) {
     const errors = typeCheck(tsCode);
     if (errors.length > 0) return { success: false, errors, logs: [], returnValue: undefined };
@@ -257,8 +262,8 @@ async function executeCode(tsCode, bindings, { skipTypeCheck = false } = {}) {
     TypeError, RangeError, Number, String, Boolean, Symbol,
     parseInt, parseFloat, isNaN, isFinite, encodeURIComponent, decodeURIComponent,
     undefined, NaN, Infinity, URL, URLSearchParams, YAML,
-    // zx shell utilities — uses truncating wrapper
-    $: createTruncating$(process.cwd()),
+    // zx shell utilities — uses truncating wrapper with optional prefix
+    $: createTruncating$(process.cwd(), shellPrefix),
     cd: zx.cd,
     nothrow: zx.nothrow,
     quiet: zx.quiet,
@@ -529,6 +534,20 @@ async function test(name, fn) {
       assert(val.hasTempPath, "stdout has temp file path");
       assert(val.lineCount <= 2010, "line count reduced (got " + val.lineCount + ")");
       assert(val.lineCount >= 1900, "still has ~2000 lines (got " + val.lineCount + ")");
+    }
+  });
+
+  await test("Pipeline: $ with shellPrefix applies prefix (skip type check)", async () => {
+    // Override createTruncating$ in the sandbox to use a prefix that sets a var
+    // We test this by checking the prefix is prepended to commands
+    const prefixedResult = await executeCode(
+      'const r = await $`echo $MY_TEST_VAR`;\nreturn r.stdout.trim();',
+      mockBindings,
+      { skipTypeCheck: true, shellPrefix: "export MY_TEST_VAR=hello_from_prefix" }
+    );
+    assert(prefixedResult.success, "success (" + prefixedResult.errors.map(e => e.message).join(", ") + ")");
+    if (prefixedResult.success) {
+      assert(prefixedResult.returnValue === "hello_from_prefix", 'got "' + prefixedResult.returnValue + '"');
     }
   });
 

@@ -46,6 +46,8 @@ export interface SandboxOptions {
   signal?: AbortSignal;
   /** Callback for streaming progress updates to the UI */
   onUpdate?: (update: { content: Array<{ type: string; text: string }>; details?: any }) => void;
+  /** Shell command prefix prepended to every $ command (from pi's shellCommandPrefix setting) */
+  shellPrefix?: string;
 }
 
 const DEFAULT_TIMEOUT = 120_000;
@@ -239,10 +241,18 @@ function truncateProcessOutput(output: zx.ProcessOutput): zx.ProcessOutput {
 function createTruncating$(
   cwd: string,
   signal?: AbortSignal,
-  onUpdate?: SandboxOptions["onUpdate"]
+  onUpdate?: SandboxOptions["onUpdate"],
+  shellPrefix?: string
 ) {
   const opts: Record<string, unknown> = { cwd };
   if (signal) opts.signal = signal;
+  // Compose shell prefix: keep zx's default "set -euo pipefail;" and append
+  // the user's shell command prefix (e.g., "export TERM=dumb CI=true ...").
+  // The prefix is prepended to every command executed via $.
+  if (shellPrefix) {
+    const normalized = shellPrefix.trimEnd().replace(/;$/, "");
+    opts.prefix = `set -euo pipefail; ${normalized}; `;
+  }
 
   // Hook into zx's log system to stream partial output to the UI.
   // zx calls $.log({ kind: "stdout", data: Buffer }) for each chunk of output.
@@ -346,6 +356,7 @@ export async function executeCode(
   const cwd = options?.cwd ?? process.cwd();
   const signal = options?.signal;
   const onUpdate = options?.onUpdate;
+  const shellPrefix = options?.shellPrefix;
 
   // Set zx's working directory for this execution
   zx.$.cwd = cwd;
@@ -464,8 +475,8 @@ export async function executeCode(
     btoa,
     YAML,
 
-    // zx shell scripting utilities — $ is configured with cwd and abort signal
-    $: createTruncating$(cwd, signal, onUpdate),
+    // zx shell scripting utilities — $ is configured with cwd, abort signal, and shell prefix
+    $: createTruncating$(cwd, signal, onUpdate, shellPrefix),
     cd: zx.cd,
     within: zx.within,
     nothrow: zx.nothrow,

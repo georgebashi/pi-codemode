@@ -12,6 +12,7 @@
 // Search: MiniSearch FTS over all Pi + MCP tools (fuzzy, prefix, BM25 ranked)
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { SettingsManager } from "@mariozechner/pi-coding-agent";
 import { initTypeChecker } from "./type-checker.js";
 import {
   generateBuiltinTypeDefs,
@@ -62,6 +63,17 @@ export default function codeMode(pi: ExtensionAPI) {
   // Build system prompt summary: compact MCP listing (not full types)
   const mcpSummary = generateMcpSummaryForPrompt(mcpServers);
 
+  // --- Read shell command prefix from pi settings ---
+  // This prefix (e.g., "export TERM=dumb CI=true ...") is prepended to every
+  // shell command, matching pi's built-in bash tool behavior.
+  let shellPrefix: string | undefined;
+  try {
+    const settings = SettingsManager.create();
+    shellPrefix = settings.getShellCommandPrefix();
+  } catch {
+    // Settings not available — no prefix
+  }
+
   // --- Register the execute_tools tool ---
 
   const executeTool = createExecuteTool({
@@ -70,6 +82,7 @@ export default function codeMode(pi: ExtensionAPI) {
       cwd: process.cwd(),
       mcpClient,
     },
+    shellPrefix,
   });
 
   pi.registerTool(executeTool);
