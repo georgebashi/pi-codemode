@@ -34,6 +34,10 @@ export interface ResolvedPackage {
   scope: "global" | "project";
   /** Human-readable description (from config or package.json) */
   description: string;
+  /** Named export picked from the module (e.g., "simpleGit", "graphql") */
+  exportName?: string;
+  /** Usage hint for the system prompt */
+  hint?: string;
 }
 
 /** Raw config format from codemode.json */
@@ -46,6 +50,11 @@ export interface PackageSpec {
   as?: string;
   /** Description shown in search_tools results and system prompt */
   description?: string;
+  /** Pick a specific named export from the module instead of using the whole namespace.
+   *  e.g., "simpleGit" picks require('simple-git').simpleGit */
+  export?: string;
+  /** Usage hint shown in the system prompt (e.g., "const repo = simpleGit('.')") */
+  hint?: string;
 }
 
 /**
@@ -114,7 +123,7 @@ function loadConfig(configPath: string, warnings: string[]): CodemodeConfig | nu
 function normalizeEntry(
   specifier: string,
   value: string | PackageSpec
-): { version: string; varName: string; description?: string } {
+): { version: string; varName: string; description?: string; exportName?: string; hint?: string } {
   if (typeof value === "string") {
     return {
       version: value,
@@ -125,6 +134,8 @@ function normalizeEntry(
     version: value.version,
     varName: value.as ?? specifierToVarName(specifier),
     description: value.description,
+    exportName: value.export,
+    hint: value.hint,
   };
 }
 
@@ -167,7 +178,7 @@ function ensureInstalledAndResolve(
   // Build desired dependencies (including @types/* for type checking)
   const desiredDeps: Record<string, string> = {};
   let optionalTypeDeps: Record<string, string> | undefined;
-  const entryMap = new Map<string, { version: string; varName: string; description?: string }>();
+  const entryMap = new Map<string, ReturnType<typeof normalizeEntry>>();
 
   for (const [specifier, value] of entries) {
     const normalized = normalizeEntry(specifier, value);
@@ -255,7 +266,25 @@ function ensureInstalledAndResolve(
     try {
       // Resolve the package's main entry from the install dir
       const resolvedPath = require.resolve(specifier, { paths: [installDir] });
-      const mod = require(resolvedPath);
+      let mod = require(resolvedPath);
+
+      // Pick a named export — either explicitly configured or auto-detected.
+      // Auto-detect: if mod[varName] is a function, use it instead of the namespace.
+      // This handles the common pattern where a package exports a factory/API function
+      // with the same name (e.g., require('simple-git').simpleGit, require('got').got).
+      let exportName = entry.exportName;
+      if (!exportName && mod != null && typeof mod[entry.varName] === "function") {
+        exportName = entry.varName;
+      }
+
+      if (exportName) {
+        if (mod != null && exportName in Object(mod)) {
+          mod = mod[exportName];
+        } else {
+          warnings.push(`Package "${specifier}": export "${exportName}" not found`);
+          continue;
+        }
+      }
 
       // Find the package directory for type checking
       const pkgDir = findPackageDir(specifier, nodeModulesDir);
@@ -283,6 +312,8 @@ function ensureInstalledAndResolve(
         hasTypes,
         scope,
         description,
+        exportName,
+        hint: entry.hint,
       });
     } catch (e: any) {
       warnings.push(`Failed to resolve package "${specifier}": ${e.message}`);

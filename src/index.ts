@@ -86,7 +86,7 @@ export default function codeMode(pi: ExtensionAPI) {
 
   // Build system prompt summary: compact MCP listing (not full types)
   const mcpSummary = generateMcpSummaryForPrompt(mcpServers);
-  const userPackageInfo = userPackages.map(p => ({ varName: p.varName, specifier: p.specifier, description: p.description }));
+  const userPackageInfo = userPackages.map(p => ({ varName: p.varName, specifier: p.specifier, description: p.description, hint: p.hint }));
 
   // --- Read shell command prefix from pi settings ---
   // This prefix (e.g., "export TERM=dumb CI=true ...") is prepended to every

@@ -45,7 +45,7 @@ return Object.keys(JSON.parse(pkg).dependencies || {});
 
 ```typescript
 // Shell commands with automatic escaping
-const result = await $\`grep -rn "TODO" --include='*.ts' src\`;
+const result = await $`grep -rn "TODO" --include='*.ts' src`;
 print(result.stdout);
 ```
 
@@ -64,27 +64,49 @@ Any npm package can be injected into the sandbox as a global. Packages are auto-
 ```jsonc
 {
   "packages": {
-    "simple-git": { "version": "^3.33.0", "as": "git" },
-    "yaml": { "version": "^2.8.0", "as": "YAML" },
-    "@octokit/graphql": { "version": "^8.0.0", "as": "graphql" },
-    "csv-parse": { "version": "^5.0.0", "as": "csvParse" }
+    // Just a version string for packages that work out of the box
+    "simple-git": "^3.33.0",
+    "@octokit/graphql": "^8.0.0",
+    "csv-parse": "^5.0.0",
+    // Use an object to customize the variable name
+    "yaml": { "version": "^2.8.0", "as": "YAML" }
   }
 }
 ```
 
 **Global** (all projects) — `~/.pi/agent/codemode.json`, same format.
 
-Then the LLM can use them directly:
+### Package config options
+
+| Field | Description |
+|-------|-------------|
+| `version` | npm version range (required) |
+| `as` | Global variable name in the sandbox. Default: camelCased package name |
+| `export` | Pick a specific named export instead of the full module namespace |
+| `hint` | Usage hint shown to the LLM in the system prompt |
+| `description` | Custom description (default: from package.json) |
+
+**Auto-detection:** When a module has a named export matching the variable name (e.g., `require('simple-git').simpleGit`), it's picked automatically — the agent gets the callable factory and can write `simpleGit()` exactly like the library docs. Use `export` to override this when the auto-detection doesn't match what you want.
+
+Then the LLM uses them directly — code matches library docs:
 
 ```typescript
-// Git operations
+// Git operations — exactly like simple-git docs
+const git = simpleGit();
 const status = await git.status();
 const log = await git.log({ maxCount: 5 });
 
+// Works for any repo path
+const other = simpleGit('/path/to/other/repo');
+```
+
+```typescript
 // YAML parsing
 const config = YAML.parse(await tools.read({ path: "config.yml" }));
+```
 
-// GitHub GraphQL API — request exactly the fields you need
+```typescript
+// GitHub GraphQL API
 const { repository } = await graphql(`{
   repository(owner: "org", name: "repo") {
     pullRequests(last: 10, states: OPEN) {

@@ -48,6 +48,8 @@ export interface SandboxOptions {
   shellPrefix?: string;
   /** User-configured packages to inject as globals (varName → module) */
   userPackages?: Record<string, unknown>;
+  /** Named string constants injected as π.keyName — for file content that's hard to quote in JS */
+  strings?: Record<string, string>;
 }
 
 const DEFAULT_TIMEOUT = 120_000;
@@ -459,6 +461,7 @@ export async function executeCode(
   const onUpdate = options?.onUpdate;
   const shellPrefix = options?.shellPrefix;
   const userPackages = options?.userPackages ?? {};
+  const strings = options?.strings ?? {};
 
   // Set zx's working directory for this execution
   zx.$.cwd = cwd;
@@ -592,6 +595,9 @@ export async function executeCode(
     path: zx.path,
     fs: zx.fs,
     ProcessOutput: zx.ProcessOutput,
+
+    // Named string constants (from the 'strings' parameter)
+    π: Object.freeze(strings),
 
     // User-configured packages (override built-ins if same name)
     ...userPackages,

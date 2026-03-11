@@ -8,6 +8,7 @@ import { loadMcpConfig } from "pi-mcp-adapter/config.js";
 import { loadMetadataCache, isServerCacheValid, computeServerHash } from "pi-mcp-adapter/metadata-cache.js";
 import { transformMcpContent } from "pi-mcp-adapter/tool-registrar.js";
 import type { McpContent } from "pi-mcp-adapter/types.js";
+import { generateToolSignature } from "./type-generator.js";
 
 /** Info about an MCP tool (from cache or live connection) */
 export interface McpToolInfo {
@@ -147,7 +148,14 @@ export function createMcpClient(): McpClient {
         const text = textParts.join("\n") || "(empty result)";
 
         if (result.isError) {
-          throw new Error(text);
+          // Enrich error with schema hints to help self-correction
+          const info = servers.get(namespace)!;
+          const toolInfo = info.tools.find((t) => t.name === toolName);
+          let errorMsg = `MCP tool error: tools.${namespace}.${toolName}()\n\n${text}`;
+          if (toolInfo) {
+            errorMsg += `\n\nExpected signature:\n${generateToolSignature(namespace, toolName, toolInfo.description, toolInfo.inputSchema)}`;
+          }
+          throw new Error(errorMsg);
         }
 
         return text;

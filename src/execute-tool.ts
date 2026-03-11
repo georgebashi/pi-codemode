@@ -45,19 +45,24 @@ Available tools in code:
 - tools.search_tools({ query }) → discover available tools
 - tools.progress(msg) → stream progress to UI
 - print(...) → output to include in result
+- π.keyName → string constants from the 'strings' parameter
 
 Return a value to include it in the result. Type errors are returned for correction.`,
 
     parameters: Type.Object({
       code: Type.String({
         description:
-          "TypeScript code body. Has access to tools.read(), tools.write(), tools.edit(), tools.<server>.<tool>() for MCP, tools.search_tools(), print(), and tools.progress().",
+          "TypeScript code body. Has access to tools.read(), tools.write(), tools.edit(), tools.<server>.<tool>() for MCP, tools.search_tools(), print(), and tools.progress(). String constants from the 'strings' parameter are available as π.keyName.",
       }),
+      strings: Type.Optional(Type.Record(Type.String(), Type.String(), {
+        description:
+          "Named string constants injected into the code as π.keyName. Use this for file content, templates, or any text that would be hard to quote inside JavaScript code. The strings only need standard JSON escaping — no JS string literal escaping required.",
+      })),
     }),
 
     async execute(
       toolCallId: string,
-      params: { code: string },
+      params: { code: string; strings?: Record<string, string> },
       signal: AbortSignal | undefined,
       onUpdate: any,
       ctx: ExtensionContext
@@ -72,7 +77,7 @@ Return a value to include it in the result. Type errors are returned for correct
         params.code,
         typeDefs,
         bindings,
-        { timeout, maxOutputSize, cwd: bindingsOptions.cwd, signal, onUpdate, shellPrefix, userPackages }
+        { timeout, maxOutputSize, cwd: bindingsOptions.cwd, signal, onUpdate, shellPrefix, userPackages, strings: params.strings }
       );
 
       if (!result.success) {
@@ -130,13 +135,21 @@ Return a value to include it in the result. Type errors are returned for correct
       };
     },
 
-    renderCall(args: { code: string }, theme: any) {
+    renderCall(args: { code: string; strings?: Record<string, string> }, theme: any) {
       try {
         const { highlightCode } = require("@mariozechner/pi-coding-agent");
         const { Text } = require("@mariozechner/pi-tui");
         // highlightCode returns string[] (one per line), join them
-        const highlighted = highlightCode(args.code, "typescript");
-        const text = Array.isArray(highlighted) ? highlighted.join("\n") : String(highlighted);
+        const highlighted = highlightCode(args.code.trim(), "typescript");
+        let text = Array.isArray(highlighted) ? highlighted.join("\n") : String(highlighted);
+        // Show string constants if present
+        if (args.strings && Object.keys(args.strings).length > 0) {
+          const stringsSection = Object.entries(args.strings).map(([key, val]) => {
+            const preview = val.length > 200 ? val.slice(0, 200) + "..." : val;
+            return theme.fg("dim", `π.${key}`) + " = " + theme.fg("dim", JSON.stringify(preview));
+          }).join("\n");
+          text = theme.fg("dim", "// String constants:") + "\n" + stringsSection + "\n\n" + text;
+        }
         return new Text(text, 0, 0);
       } catch {
         const { Text } = require("@mariozechner/pi-tui");
@@ -185,8 +198,8 @@ Return a value to include it in the result. Type errors are returned for correct
         return new Text(lines + elapsed, 0, 0);
       }
 
-      // Success
-      const text = result.content?.[0]?.text ?? "(no output)";
+      // Success — trim to avoid leading/trailing blank lines
+      const text = (result.content?.[0]?.text ?? "(no output)").trim();
       const lineCount = text.split("\n").length;
 
       if (!expanded && lineCount > 5) {

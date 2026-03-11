@@ -138,6 +138,20 @@ declare const fs: typeof import('fs-extra');
 // Re-export types so user code can reference ProcessOutput/ProcessPromise by name
 type _ProcessOutput = ProcessOutput;
 type _ProcessPromise = ProcessPromise;
+// Fix zx's ProcessPromise.then() — upstream defaults E to ProcessOutput instead of never,
+// which pollutes the resolved type when using .then() without an onrejected handler.
+// This matches standard Promise semantics and our sandbox wrapper's runtime behavior.
+declare module 'zx' {
+  interface ProcessPromise {
+    then<R = ProcessOutput, E = never>(
+      onfulfilled?: ((value: ProcessOutput) => PromiseLike<R> | R) | undefined | null,
+      onrejected?: ((reason: ProcessOutput) => PromiseLike<E> | E) | undefined | null
+    ): Promise<R | E>;
+  }
+}
+
+/** Named string constants passed via the 'strings' parameter. Use for file content that's hard to quote in JS. */
+declare const π: Readonly<Record<string, string>>;
 `;
 }
 
@@ -179,7 +193,8 @@ interface McpServerNamespaces {}
         ? jsonSchemaToTypeString(tool.inputSchema, "  ")
         : "Record<string, unknown>";
       const safeName = safePropName(tool.name);
-      parts.push(`  ${safeName}(args: ${paramsType}): Promise<string>;`);
+      const argsOptional = !hasRequiredProperties(tool.inputSchema);
+      parts.push(`  ${safeName}(args${argsOptional ? "?" : ""}: ${paramsType}): Promise<string>;`);
     }
     parts.push(`}`);
     parts.push(``);
@@ -221,6 +236,28 @@ function serverInterfaceName(namespace: string): string {
     .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
     .join("");
   return `Mcp${pascal}Tools`;
+}
+
+/**
+ * Generate a TypeScript call signature for a single MCP tool.
+ * Used by describe_tools and MCP error messages.
+ */
+export function generateToolSignature(
+  namespace: string,
+  toolName: string,
+  description: string | undefined,
+  inputSchema: unknown
+): string {
+  const lines: string[] = [];
+  if (description) {
+    lines.push(`/** ${description.replace(/\*\//g, "* /").replace(/\n/g, " ")} */`);
+  }
+  const paramsType = inputSchema
+    ? jsonSchemaToTypeString(inputSchema, "")
+    : "Record<string, unknown>";
+  const argsOptional = !hasRequiredProperties(inputSchema);
+  lines.push(`tools.${namespace}.${toolName}(args${argsOptional ? "?" : ""}: ${paramsType}): Promise<string>`);
+  return lines.join("\n");
 }
 
 /**
@@ -319,6 +356,16 @@ function jsonSchemaToTypeString(schema: unknown, indent: string = ""): string {
   return "unknown";
 }
 
+/**
+ * Check if a JSON Schema has any required properties.
+ * Returns false for undefined/null/empty schemas or schemas with no required array.
+ */
+function hasRequiredProperties(schema: unknown): boolean {
+  if (!schema || typeof schema !== "object") return false;
+  const s = schema as Record<string, unknown>;
+  return Array.isArray(s.required) && s.required.length > 0;
+}
+
 function getDescription(schema: unknown): string | undefined {
   if (schema && typeof schema === "object" && "description" in schema) {
     return (schema as { description?: string }).description;
@@ -338,11 +385,12 @@ function safePropName(name: string): string {
 /**
  * Generate TypeScript type declarations for user-configured packages.
  *
- * For packages with types: generates import + declare const referencing the real types.
- * For packages without types: generates declare const as any.
+ * Generates the correct type based on config:
+ * - No export field:    typeof import('pkg')              — full module namespace
+ * - { export: "x" }:   typeof import('pkg').x             — specific named export
  */
 export function generatePackageTypeDefs(
-  packages: Array<{ specifier: string; varName: string; hasTypes: boolean }>
+  packages: Array<{ specifier: string; varName: string; hasTypes: boolean; exportName?: string }>
 ): string {
   if (packages.length === 0) return "";
 
@@ -355,7 +403,13 @@ export function generatePackageTypeDefs(
       // Import the real types so the type checker can validate usage
       const importName = `_pkg_${sanitizeIdentifier(pkg.varName)}`;
       lines.push(`import type * as ${importName} from '${pkg.specifier}';`);
-      lines.push(`declare const ${pkg.varName}: typeof ${importName};`);
+
+      // Build the type expression: full module or specific export
+      const typeExpr = pkg.exportName
+        ? `typeof ${importName}.${pkg.exportName}`
+        : `typeof ${importName}`;
+
+      lines.push(`declare const ${pkg.varName}: ${typeExpr};`);
     } else {
       // No types available — expose as any
       lines.push(`declare const ${pkg.varName}: any;`);

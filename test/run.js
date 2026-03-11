@@ -292,7 +292,7 @@ function createTruncating$(cwd, shellPrefix) {
 
 // --- Sandbox (from sandbox.ts) ---
 
-async function executeCode(tsCode, bindings, { skipTypeCheck = false, shellPrefix, userPackages = {} } = {}) {
+async function executeCode(tsCode, bindings, { skipTypeCheck = false, shellPrefix, userPackages = {}, strings = {} } = {}) {
   if (!skipTypeCheck) {
     const errors = typeCheck(tsCode);
     if (errors.length > 0) return { success: false, errors, logs: [], returnValue: undefined };
@@ -325,6 +325,8 @@ async function executeCode(tsCode, bindings, { skipTypeCheck = false, shellPrefi
     fs: require("fs-extra"),
     os: require("os"),
     ProcessOutput: zx.ProcessOutput,
+    // Named string constants (π)
+    π: Object.freeze(strings),
     // User-configured packages (override built-ins if same name)
     ...userPackages,
   });
@@ -724,6 +726,77 @@ async function test(name, fn) {
     assert(result.returnValue.b === 2, "pkgB.value = " + result.returnValue.b);
   });
 
+
+  // --- π string constants tests ---
+
+  await test("Pipeline: π strings injected into sandbox (skip type check)", async () => {
+    const result = await executeCode(
+      "return π.greeting;",
+      mockBindings,
+      { skipTypeCheck: true, strings: { greeting: "hello world" } }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    assert(result.returnValue === "hello world", "got: " + result.returnValue);
+  });
+
+  await test("Pipeline: π strings preserve backticks and ${} (skip type check)", async () => {
+    const content = "const x = `hello ${name}`; const y = `world`;";
+    const result = await executeCode(
+      "return π.code;",
+      mockBindings,
+      { skipTypeCheck: true, strings: { code: content } }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    assert(result.returnValue === content, "content preserved: " + JSON.stringify(result.returnValue));
+  });
+
+  await test("Pipeline: π strings used in tools.write (skip type check)", async () => {
+    let writtenContent = null;
+    const bindings = {
+      ...mockBindings,
+      write: async (params) => { writtenContent = params.content; },
+    };
+    const fileContent = "#!/bin/bash\necho `date`\nNAME=${1:-world}";
+    const result = await executeCode(
+      "await tools.write({ path: \"/tmp/test.sh\", content: π.script });",
+      bindings,
+      { skipTypeCheck: true, strings: { script: fileContent } }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    assert(writtenContent === fileContent, "write received correct content");
+  });
+
+  await test("Pipeline: π strings multiple keys (skip type check)", async () => {
+    const result = await executeCode(
+      "return { a: π.first, b: π.second, c: π.third };",
+      mockBindings,
+      { skipTypeCheck: true, strings: { first: "one", second: "two", third: "three" } }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    assert(result.returnValue.a === "one", "first: " + result.returnValue.a);
+    assert(result.returnValue.b === "two", "second: " + result.returnValue.b);
+    assert(result.returnValue.c === "three", "third: " + result.returnValue.c);
+  });
+
+  await test("Pipeline: π is frozen/readonly (skip type check)", async () => {
+    const result = await executeCode(
+      "π.test = \"modified\"; return π.test;",
+      mockBindings,
+      { skipTypeCheck: true, strings: { test: "original" } }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    assert(result.returnValue === "original", "π value unchanged: " + result.returnValue);
+  });
+
+  await test("Pipeline: π defaults to empty object (skip type check)", async () => {
+    const result = await executeCode(
+      "return typeof π === \"object\" && Object.keys(π).length === 0;",
+      mockBindings,
+      { skipTypeCheck: true }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    assert(result.returnValue === true, "π is empty object: " + result.returnValue);
+  });
   // --- Package resolver tests ---
 
   await test("Package resolver: specifierToVarName converts correctly", async () => {
@@ -768,6 +841,88 @@ async function test(name, fn) {
     assert(config.packages["csv-parse"].as === "csvParse", "csv-parse alias");
     try { fs.unlinkSync(configPath); } catch {}
   });
+
+  // --- Package export tests ---
+
+  await test("Pipeline: export field picks named export (skip type check)", async () => {
+    // Simulate what package-resolver does with { export: "greet" }
+    const mod = { greet: (name) => "Hello " + name, farewell: (name) => "Bye " + name };
+    const exported = mod.greet; // picks the named export
+    const result = await executeCode(
+      'return greet("world");',
+      mockBindings,
+      { skipTypeCheck: true, userPackages: { greet: exported } }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    assert(result.returnValue === "Hello world", "got: " + result.returnValue);
+  });
+
+  await test("Pipeline: export picks simpleGit factory (skip type check)", async () => {
+    // Simulate: { export: "simpleGit" } — injects the factory, not an instance
+    const simpleGit = require("simple-git");
+    const result = await executeCode(
+      'const repo = simpleGit(".");\n' +
+      'const status = await repo.status();\n' +
+      'return typeof status.current;',
+      mockBindings,
+      { skipTypeCheck: true, userPackages: { simpleGit: simpleGit.simpleGit } }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    assert(result.returnValue === "string", "status.current is string, got: " + result.returnValue);
+  });
+
+  await test("Pipeline: auto-detected export for simpleGit (skip type check)", async () => {
+    // Simulate auto-detection: mod[varName] is a function → use it
+    const mod = require("simple-git");
+    const varName = "simpleGit";
+    // Auto-detection: mod.simpleGit is a function, so use it
+    const autoExport = typeof mod[varName] === "function" ? mod[varName] : mod;
+    const result = await executeCode(
+      'const git = simpleGit(".");\n' +
+      'const status = await git.status();\n' +
+      'return typeof status.current;',
+      mockBindings,
+      { skipTypeCheck: true, userPackages: { simpleGit: autoExport } }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    assert(result.returnValue === "string", "status.current is string, got: " + result.returnValue);
+  });
+
+  // --- Type generation for export ---
+
+  await test("Type generation: no export generates typeof import", async () => {
+    function genType(pkg) {
+      const importName = "_pkg_" + pkg.varName;
+      return pkg.exportName
+        ? "typeof " + importName + "." + pkg.exportName
+        : "typeof " + importName;
+    }
+    const result = genType({ varName: "yaml" });
+    assert(result === "typeof _pkg_yaml", "got: " + result);
+  });
+
+  await test("Type generation: export generates typeof import.export", async () => {
+    function genType(pkg) {
+      const importName = "_pkg_" + pkg.varName;
+      return pkg.exportName
+        ? "typeof " + importName + "." + pkg.exportName
+        : "typeof " + importName;
+    }
+    const result = genType({ varName: "graphql", exportName: "graphql" });
+    assert(result === "typeof _pkg_graphql.graphql", "got: " + result);
+  });
+
+  await test("Type generation: export picks factory type", async () => {
+    function genType(pkg) {
+      const importName = "_pkg_" + pkg.varName;
+      return pkg.exportName
+        ? "typeof " + importName + "." + pkg.exportName
+        : "typeof " + importName;
+    }
+    const result = genType({ varName: "simpleGit", exportName: "simpleGit" });
+    assert(result === "typeof _pkg_simpleGit.simpleGit", "got: " + result);
+  });
+
 
   // --- Benchmark ---
   console.log("\nBenchmark:");

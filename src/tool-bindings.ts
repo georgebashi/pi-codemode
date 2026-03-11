@@ -18,6 +18,7 @@ import {
 import type { AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { McpClient } from "./mcp-client.js";
 import { searchTools } from "./search.js";
+import { generateToolSignature } from "./type-generator.js";
 
 /** The shape the sandbox code sees at runtime — base tools */
 export interface ToolBindings {
@@ -124,40 +125,13 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
         }
         return text.trimEnd();
       }
-      // Describe a specific tool with full parameter info
+      // Describe a specific tool with full TypeScript signature
       const tool = server.tools.find((t) => t.name === params.tool);
       if (!tool) {
         const names = server.tools.map((t) => t.name).join(", ");
         return `Unknown tool "${params.tool}" in tools.${server.namespace}. Available: ${names}`;
       }
-      let text = `tools.${server.namespace}.${tool.name}()\n`;
-      if (tool.description) {
-        text += `${tool.description}\n`;
-      }
-      text += "\nParameters:\n";
-      const schema = tool.inputSchema as Record<string, unknown> | undefined;
-      if (!schema || !schema.properties || typeof schema.properties !== "object") {
-        text += "  (no parameters)\n";
-        return text.trimEnd();
-      }
-      const props = schema.properties as Record<string, Record<string, unknown>>;
-      const required = Array.isArray(schema.required) ? (schema.required as string[]) : [];
-      for (const [name, prop] of Object.entries(props)) {
-        const isReq = required.includes(name);
-        const type = String(prop.type ?? "unknown");
-        text += `  ${name}${isReq ? " (required)" : ""}: ${type}`;
-        if (prop.description) {
-          text += `\n    ${prop.description}`;
-        }
-        if (prop.enum && Array.isArray(prop.enum)) {
-          text += `\n    Allowed values: ${prop.enum.map((v: unknown) => JSON.stringify(v)).join(", ")}`;
-        }
-        if (prop.default !== undefined) {
-          text += `\n    Default: ${JSON.stringify(prop.default)}`;
-        }
-        text += "\n";
-      }
-      return text.trimEnd();
+      return generateToolSignature(server.namespace, tool.name, tool.description, tool.inputSchema);
     },
     progress(message: string) {
       if (onUpdate) {
