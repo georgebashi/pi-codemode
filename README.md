@@ -1,154 +1,140 @@
 # pi-codemode
 
-A [Pi](https://github.com/nichochar/pi-coding-agent) extension that replaces most tools with a single `execute_tools` tool. Instead of calling tools individually, the LLM writes TypeScript code that calls tools as typed functions—reducing round-trips, saving context window, and catching errors before execution.
+**What if your coding agent could write real code to call its own tools — with type-checking, parallelism, and shell access — in a single round-trip?**
+
+[![npm version](https://img.shields.io/npm/v/@georgebashi/pi-codemode?style=for-the-badge)](https://www.npmjs.com/package/@georgebashi/pi-codemode)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
+
+## Why
+
+- **Fewer round-trips** — "read file A, grep for X, read matches, extract Y" takes 5+ individual tool calls. In code mode, it's one `execute_tools` call.
+- **Type-safe** — Full TypeScript type-checking catches wrong parameter types, missing required fields, and non-existent tools *before* any code runs. The LLM gets actionable errors and self-corrects.
+- **Tiny context window** — Without code mode, 50 MCP tools cost 5,000–10,000 tokens. Code mode keeps it constant: one tool definition (~100 tokens) + compact type defs. MCP details are discovered on-demand.
+- **Shell built in** — zx template literals with automatic argument escaping, output truncation, and streaming. No separate bash tool needed.
+- **Parallel by default** — `Promise.all` for concurrent file reads, shell commands, and MCP calls. The LLM learns this pattern fast.
 
 Inspired by Cloudflare's [Code Mode](https://blog.cloudflare.com/code-mode/) pattern.
 
-## How it works
+## Install
 
-```
-┌─────────────────────────────────────────────────┐
-│  LLM writes TypeScript code                     │
-│                                                 │
-│  const [pkg, readme] = await Promise.all([      │
-│    tools.read({ path: "package.json" }),         │
-│    tools.read({ path: "README.md" }),            │
-│  ]);                                            │
-│  const deps = JSON.parse(pkg).dependencies;     │
-│  return Object.keys(deps);                      │
-└───────────────┬─────────────────────────────────┘
-                │
-                ▼
-┌─────────────────────────────────────────────────┐
-│  execute_tools pipeline                         │
-│                                                 │
-│  1. Type-check against tool API (TypeScript)    │
-│  2. Strip types (esbuild)                       │
-│  3. Execute in Node.js VM sandbox               │
-│  4. Return result (or type/runtime errors)      │
-└───────────────┬─────────────────────────────────┘
-                │
-                ▼
-┌─────────────────────────────────────────────────┐
-│  Tool implementations                           │
-│                                                 │
-│  Built-in: read, write, edit                    │
-│  Shell: zx $ (with truncation + streaming)      │
-│  MCP: lazy-connected server namespaces          │
-│  User packages: configurable via codemode.json  │
-└─────────────────────────────────────────────────┘
+```bash
+pi install npm:@georgebashi/pi-codemode
 ```
 
-**The key insight:** type-checking catches wrong parameter types, missing required fields, and non-existent tools *before* any code runs. The LLM gets actionable error messages and self-corrects.
+Or via git:
+
+```bash
+pi install https://github.com/georgebashi/pi-codemode
+```
+
+Run once without installing:
+
+```bash
+pi -e npm:@georgebashi/pi-codemode
+```
+
+## Quick Start
+
+Once loaded, code mode replaces Pi's individual tools with a single `execute_tools` tool. The LLM automatically writes TypeScript that calls tools as functions:
+
+```typescript
+// Read 3 files at once — 3x faster than sequential tool calls
+const [pkg, readme, tsconfig] = await Promise.all([
+  tools.read({ path: "package.json" }),
+  tools.read({ path: "README.md" }),
+  tools.read({ path: "tsconfig.json" }),
+]);
+return { deps: Object.keys(JSON.parse(pkg).dependencies || {}), hasReadme: readme.length > 0 };
+```
+
+```typescript
+// Shell commands with automatic escaping
+const result = await $\`grep -rn "TODO" --include='*.ts' src\`;
+print(result.stdout);
+```
+
+```typescript
+// Discover and call MCP tools — no upfront cost
+const details = await tools.describe_tools({ namespace: "slack", tool: "channels_me" });
+const channels = await tools.slack.channels_me({ channel_types: "im", limit: 20 });
+return channels;
+```
+
+```typescript
+// Chain: find files → read them → extract data
+const found = await $\`find src -name '*.test.ts'\`;
+const files = found.stdout.split('\n').filter(f => f.trim());
+const contents = await Promise.all(files.map(f => tools.read({ path: f })));
+const tests = contents.flatMap((c, i) => {
+  const matches = c.match(/it\\(['"](.+?)['"]/g) || [];
+  return matches.map(m => ({ file: files[i], test: m }));
+});
+return tests;
+```
 
 ## Features
 
-- **TypeScript type-checking** — Full `ts.createProgram` validation against the tool API. Catches type mismatches, missing params, unknown tools (~2ms per check after warmup).
-- **Shell via zx** — `$\`command\`` template literals with automatic argument escaping, output truncation (2000 lines / 50KB tail), and streaming to the UI.
-- **MCP integration** — All MCP servers available as typed namespaces (`tools.slack.channels_me()`). Tool metadata loaded from cache (instant), servers connect lazily on first call.
-- **Progressive discovery** — System prompt stays small. The LLM uses `search_tools()` (MiniSearch FTS) and `describe_tools()` to find and inspect tools at runtime.
-- **User packages** — Configure additional npm packages via `codemode.json`. Auto-installed, with TypeScript types when available.
-- **Output truncation** — Shell output tail-truncated to 2000 lines / 50KB with full output saved to temp files. Binary/control characters sanitized.
-- **Cancellation** — Abort signal support for cancelling long-running code.
+### TypeScript Type-Checking
 
-## Installation
+Every code block is validated with `ts.createProgram` against the full tool API before execution. Type mismatches, missing params, and unknown tools are caught instantly — no side effects until types are valid.
 
-```bash
-cd pi-codemode
-npm install
+```
+Type errors (code was NOT executed):
+Line 3: Argument of type '{ pat: string }' is not assignable to parameter.
+  Object literal may only specify known properties, and 'pat' does not exist in type '{ path: string }'.
 ```
 
-Add to your Pi extensions config (`~/.pi/agent/extensions.json`):
+~2ms per check after warmup. The LLM sees the error, fixes the typo, and retries — all without any files being touched.
 
-```json
-{
-  "extensions": [
-    "/path/to/pi-codemode/src/index.ts"
-  ]
-}
-```
+### Shell via zx
 
-Or use the `pi` field in `package.json` (already configured):
-
-```json
-{
-  "pi": {
-    "extensions": ["./src/index.ts"]
-  }
-}
-```
-
-## Usage
-
-Once loaded, code mode replaces Pi's individual tools with `execute_tools`. The LLM automatically writes TypeScript that calls tools as functions.
-
-### Built-in tools
+Full [zx](https://google.github.io/zx/) integration with template literals, automatic argument escaping, and output truncation:
 
 ```typescript
-// Read files
-const content = await tools.read({ path: "src/index.ts" });
+// Arguments are automatically escaped — safe with any input
+const file = "path with spaces/file.ts";
+const result = await $\`cat ${file}\`;
 
-// Write files
-await tools.write({ path: "output.txt", content: "hello" });
-
-// Edit files (find and replace)
-await tools.edit({ path: "src/index.ts", oldText: "foo", newText: "bar" });
-
-// Print output (captured and returned)
-print("Found", results.length, "items");
-
-// Return values (included in result)
-return { count: 42, items: ["a", "b"] };
-```
-
-### Shell commands (zx)
-
-```typescript
-// Template literals with automatic escaping
-const result = await $\`grep -rn "TODO" --include='*.ts' src\`;
-print(result.stdout);
-
-// Parallel commands
+// Parallel shell commands
 const [status, branch] = await Promise.all([
   $\`git status --porcelain\`,
   $\`git branch --show-current\`,
 ]);
 ```
 
-### MCP tools
+Output is tail-truncated to 2000 lines / 50KB. Full output is saved to a temp file and the path is shown in the truncation notice.
+
+### MCP Integration
+
+All MCP servers appear as typed namespaces. Metadata is loaded from cache (instant, no connections needed). Servers connect lazily on first actual tool call.
 
 ```typescript
-// Discover tools
-const found = await tools.search_tools({ query: "slack channels" });
-
-// Browse a namespace
+// Browse available tools
 const slackTools = await tools.describe_tools({ namespace: "slack" });
 
-// Get full parameter details
-const details = await tools.describe_tools({ namespace: "slack", tool: "channels_me" });
+// Search across all servers
+const found = await tools.search_tools({ query: "send message" });
 
-// Call MCP tools as typed functions
-const channels = await tools.slack.channels_me({ channel_types: "im", limit: 20 });
+// Call with full type-checking
+const result = await tools.slack.post_message({ channel: "#general", text: "Hello!" });
 ```
 
-### Parallel execution
+### Progressive Discovery
 
-```typescript
-// Read multiple files concurrently
-const [pkg, readme, config] = await Promise.all([
-  tools.read({ path: "package.json" }),
-  tools.read({ path: "README.md" }),
-  tools.read({ path: "tsconfig.json" }),
-]);
-```
+The system prompt stays small. Instead of dumping all tool schemas upfront:
 
-## User Packages
+| Approach | Context cost |
+|----------|-------------|
+| Traditional (50 MCP tools) | 5,000–10,000 tokens |
+| Code mode | ~500 tokens (fixed) |
 
-Configure additional npm packages to be available in the sandbox. Packages are auto-installed into dedicated directories (your project's `node_modules` is never touched).
+The LLM uses `search_tools()` (fuzzy full-text search via MiniSearch) and `describe_tools()` to find and inspect tools at runtime. Only what's needed enters the context.
 
-### Configuration
+### User Packages
 
-**Project-local** — create `.pi/codemode.json` in your project root:
+Configure additional npm packages to be available as globals in the sandbox. Packages are auto-installed into dedicated directories — your project's `node_modules` is never touched.
+
+**Project-local** — `.pi/codemode.json`:
 
 ```jsonc
 {
@@ -159,25 +145,7 @@ Configure additional npm packages to be available in the sandbox. Packages are a
 }
 ```
 
-**Global** (all projects) — create `~/.pi/agent/codemode.json`:
-
-```jsonc
-{
-  "packages": {
-    "lodash": ">=4.17.21"
-  }
-}
-```
-
-Packages are installed into `.pi/codemode-packages/` (project) or `~/.pi/agent/codemode-packages/` (global). Add `.pi/codemode-packages/` to your `.gitignore`.
-
-### Override order
-
-Project packages override global packages for the same variable name. User packages can also override built-in globals (`fs`, `path`, `os`, `$`, etc.).
-
-### Recommended packages
-
-These packages are commonly useful in codemode and are strongly recommended:
+**Global** (all projects) — `~/.pi/agent/codemode.json`:
 
 ```jsonc
 {
@@ -188,34 +156,87 @@ These packages are commonly useful in codemode and are strongly recommended:
 }
 ```
 
-This gives you:
+TypeScript types are automatically resolved — from the package itself, from `@types/*`, or falling back to `any`.
 
-```typescript
-// Git operations (simple-git)
-const status = await git.status();
-const log = await git.log({ maxCount: 5 });
-await git.add(".");
-await git.commit("fix: resolve issue");
+### Custom Rendering
 
-// YAML parsing
-const config = YAML.parse(await tools.read({ path: "config.yml" }));
-```
+Code blocks are syntax-highlighted in the TUI. Results show a compact summary by default with full output available via Ctrl+O:
 
-### Type checking
-
-TypeScript types are automatically resolved:
-- If the package ships its own types (`types` field in package.json), they're loaded directly
-- If `@types/*` exists on npm, it's auto-installed as an optional dependency
-- If no types are available, the package is typed as `any` (still usable, just untyped)
+| View | What's shown |
+|------|-------------|
+| Collapsed | ✓ First 3 lines + "N more lines" |
+| Expanded | Full output |
+| Error (collapsed) | ✗ First error message |
+| Error (expanded) | All errors with line numbers |
+| Streaming | "Executing..." with progress updates |
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
 | `/codemode` | Toggle code mode on/off |
-| `--no-codemode` | Disable code mode entirely (flag) |
+| `--no-codemode` | Disable code mode entirely (CLI flag) |
 
-## Architecture
+## Configuration
+
+### User packages
+
+| Location | Config file | Install directory |
+|----------|------------|-------------------|
+| Global | `~/.pi/agent/codemode.json` | `~/.pi/agent/codemode-packages/` |
+| Project | `.pi/codemode.json` | `.pi/codemode-packages/` |
+
+Project packages override global packages for the same variable name. User packages can also override built-in globals (`fs`, `path`, `os`, `$`, etc.).
+
+### Built-in globals
+
+These are always available in the sandbox without any configuration:
+
+| Global | Source | Description |
+|--------|--------|-------------|
+| `tools.*` | pi-codemode | File I/O, MCP, search, progress |
+| `$` | zx | Shell commands via template literals |
+| `cd`, `within`, `nothrow`, `quiet` | zx | Shell utilities |
+| `retry`, `sleep`, `spinner`, `echo` | zx | Flow control |
+| `glob`, `which`, `quote` | zx | File finding, path lookup, escaping |
+| `chalk` | zx | Terminal string styling |
+| `fs` | fs-extra | Enhanced file system operations |
+| `path`, `os` | Node.js | Path manipulation, OS info |
+| `print()` | pi-codemode | Output capture (like `console.log`) |
+| `JSON`, `YAML` | built-in | Parse and serialize data |
+
+## Performance
+
+| Step | Time | Notes |
+|------|------|-------|
+| Lib loading (one-time) | ~150ms | 53 ES2022 lib files + @types + zx |
+| Type check | ~2ms | After warmup (lib files cached) |
+| esbuild strip | <1ms | Type stripping only |
+| **Full pipeline** | **~5ms + tool calls** | Type check → strip → execute |
+
+## How It Works
+
+```
+┌─────────────────────────────────────────────────┐
+│  LLM writes TypeScript code                     │
+│                                                 │
+│  const [pkg, readme] = await Promise.all([      │
+│    tools.read({ path: "package.json" }),         │
+│    tools.read({ path: "README.md" }),            │
+│  ]);                                            │
+│  return Object.keys(JSON.parse(pkg).deps);      │
+└───────────────┬─────────────────────────────────┘
+                │
+                ▼
+┌─────────────────────────────────────────────────┐
+│  Pipeline                                       │
+│                                                 │
+│  1. Type-check against tool API (TypeScript)    │
+│  2. Strip types (esbuild, <1ms)                 │
+│  3. Execute in Node.js VM sandbox               │
+│  4. Return result (or type/runtime errors)      │
+└─────────────────────────────────────────────────┘
+```
 
 ### Source files
 
@@ -228,61 +249,9 @@ TypeScript types are automatically resolved:
 | `src/sandbox.ts` | VM execution, zx shell integration, output truncation |
 | `src/tool-bindings.ts` | Runtime bindings that back the type declarations |
 | `src/mcp-client.ts` | MCP client with lazy connections and metadata cache |
-| `src/search.ts` | Full-text search over all tools (MiniSearch) |
+| `src/search.ts` | Full-text tool search (MiniSearch) |
 | `src/package-resolver.ts` | User package resolution, auto-install, and config loading |
 | `src/system-prompt.ts` | System prompt injection with type defs and examples |
-
-### Pipeline
-
-1. **LLM generates TypeScript** — guided by type definitions and examples in the system prompt
-2. **Type-check** — `ts.createProgram` validates against tool API declarations (~2ms). Errors returned immediately, no side effects.
-3. **Strip types** — esbuild removes TypeScript syntax (<1ms)
-4. **Execute** — Code runs in a `node:vm` context with tool bindings and safe globals
-5. **Return** — Success: logs + return value. Error: type errors or runtime errors with context.
-
-### MCP integration
-
-- **Instant discovery**: Tool metadata loaded from `pi-mcp-adapter`'s cache file (no connections needed)
-- **Full type checking**: MCP tool schemas converted to TypeScript interfaces for the type checker
-- **Lazy connections**: Servers only connect when a tool is actually called
-- **Typed namespaces**: `tools.slack.channels_me()` instead of generic `tools.mcp({ tool: "channels_me" })`
-
-### Type checking details
-
-The type checker uses a virtual file system containing:
-- ES2022 lib `.d.ts` files (pre-parsed once at init, ~150ms)
-- `@types/node`, `@types/fs-extra`, `@types/jsonfile` for Node.js types
-- `zx` type definitions for shell commands
-- User package type definitions (auto-resolved)
-- Tool API declarations (built-in + MCP)
-- The user's code wrapped in an async IIFE
-
-Error messages are enriched with JSDoc parameter documentation when available.
-
-## Testing
-
-```bash
-npm test
-```
-
-Runs standalone tests for the type checker, sandbox, truncation, shell integration, and git integration. No Pi runtime required.
-
-## Performance
-
-| Step | Time | Notes |
-|------|------|-------|
-| Lib loading (one-time) | ~150ms | 53 ES2022 lib files + @types + zx |
-| Type check | ~2ms | After warmup (lib files cached) |
-| esbuild strip | <1ms | Type stripping only |
-| **Full pipeline** | **~5ms + tool calls** | Type check + strip + execute |
-
-## Token budget
-
-Without code mode, each tool definition costs ~100–400 tokens. With 50 MCP tools, that's 5,000–10,000 tokens in the context window.
-
-Code mode keeps it constant: one `execute_tools` definition (~100 tokens) + type definitions in the system prompt (~400 tokens) + compact MCP server listing. MCP tool details are discovered on-demand via `search_tools()` and `describe_tools()`.
-
-The bigger win is **round-trips**: "read file A, grep for X, read matches, extract Y" takes 5+ individual tool calls. In code mode, it's one `execute_tools` call.
 
 ## Dependencies
 

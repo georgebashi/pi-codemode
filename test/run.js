@@ -428,7 +428,7 @@ async function test(name, fn) {
       mockBindings
     );
     assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
-    assert(result.returnValue === "pi-codemode", 'returned "' + result.returnValue + '"');
+    assert(result.returnValue === "@georgebashi/pi-codemode", 'returned "' + result.returnValue + '"');
   });
 
   await test("Pipeline: type error blocks execution", async () => {
