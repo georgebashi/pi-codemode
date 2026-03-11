@@ -183,6 +183,52 @@ function truncateFromTail(rawText) {
   };
 }
 
+// String methods forwarded to full text on TruncatedString
+const FORWARDED_STRING_METHODS = new Set([
+  'slice', 'substring', 'substr', 'split', 'match', 'matchAll',
+  'search', 'replace', 'replaceAll', 'indexOf', 'lastIndexOf',
+  'includes', 'startsWith', 'endsWith', 'charAt', 'charCodeAt',
+  'codePointAt', 'at', 'trim', 'trimStart', 'trimEnd',
+  'padStart', 'padEnd', 'repeat', 'normalize',
+  'toUpperCase', 'toLowerCase', 'toLocaleLowerCase', 'toLocaleUpperCase',
+]);
+
+function createTruncatedString(fullText, truncatedText) {
+  const target = {};
+  return new Proxy(target, {
+    get(_target, prop, _receiver) {
+      if (prop === 'length') return fullText.length;
+      if (typeof prop === 'string' && FORWARDED_STRING_METHODS.has(prop)) {
+        return (...args) => fullText[prop](...args);
+      }
+      if (typeof prop === 'string' && /^\d+$/.test(prop)) {
+        return fullText[Number(prop)];
+      }
+      if (prop === 'toString' || prop === 'valueOf') {
+        return () => truncatedText;
+      }
+      if (prop === Symbol.toPrimitive) {
+        return () => truncatedText;
+      }
+      if (prop === 'toJSON') {
+        return () => truncatedText;
+      }
+      if (prop === Symbol.iterator) {
+        return function*() { yield* fullText; };
+      }
+      if (prop === Symbol.toStringTag) return 'String';
+      return undefined;
+    },
+    has(_target, prop) {
+      if (typeof prop === 'string' && /^\d+$/.test(prop)) {
+        return Number(prop) < fullText.length;
+      }
+      return prop === 'length' || prop === 'toString' || prop === 'valueOf'
+        || (typeof prop === 'string' && FORWARDED_STRING_METHODS.has(prop));
+    },
+  });
+}
+
 function truncateProcessOutput(output) {
   const rawStdout = output.stdout;
   const rawStderr = output.stderr;
@@ -198,11 +244,21 @@ function truncateProcessOutput(output) {
     }
   }
 
+  const stdoutStr = truncStdout.wasTruncated
+    ? createTruncatedString(sanitizeOutput(rawStdout), truncStdout.text)
+    : truncStdout.text;
+  const stderrStr = truncStderr.wasTruncated
+    ? createTruncatedString(sanitizeOutput(rawStderr), truncStderr.text)
+    : truncStderr.text;
+  const stdallStr = truncStdall.wasTruncated
+    ? createTruncatedString(sanitizeOutput(rawStdall), truncStdall.text)
+    : truncStdall.text;
+
   return new Proxy(output, {
     get(target, prop, receiver) {
-      if (prop === 'stdout') return truncStdout.text;
-      if (prop === 'stderr') return truncStderr.text;
-      if (prop === 'stdall') return truncStdall.text;
+      if (prop === 'stdout') return stdoutStr;
+      if (prop === 'stderr') return stderrStr;
+      if (prop === 'stdall') return stdallStr;
       return Reflect.get(target, prop, receiver);
     }
   });
@@ -519,21 +575,78 @@ async function test(name, fn) {
 
   await test("Truncation: $ output is truncated with temp file (skip type check)", async () => {
     // Generate >2000 lines via seq command
+    // Note: with TruncatedString, .includes()/.split() operate on FULL text,
+    // so we use toString() / template literal to get the truncated serialization.
     const result = await executeCode(
       'const r = await $`seq 1 5000`;\n' +
-      'const hasNotice = r.stdout.includes("[Showing lines");\n' +
-      'const hasTempPath = r.stdout.includes("Full output:");\n' +
-      'return { lineCount: r.stdout.split("\\n").length, hasNotice, hasTempPath };',
+      '// Use toString()/template literal to check truncated serialization\n' +
+      'const serialized = `${r.stdout}`;\n' +
+      'const hasNotice = serialized.includes("[Showing lines");\n' +
+      'const hasTempPath = serialized.includes("Full output:");\n' +
+      'const truncatedLineCount = serialized.split("\\n").length;\n' +
+      '// .split() on the TruncatedString itself gives full line count\n' +
+      'const fullLineCount = r.stdout.split("\\n").length;\n' +
+      'return { truncatedLineCount, fullLineCount, hasNotice, hasTempPath };',
       mockBindings,
       { skipTypeCheck: true }
     );
     assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
     if (result.success) {
       const val = result.returnValue;
-      assert(val.hasNotice, "stdout has truncation notice");
-      assert(val.hasTempPath, "stdout has temp file path");
-      assert(val.lineCount <= 2010, "line count reduced (got " + val.lineCount + ")");
-      assert(val.lineCount >= 1900, "still has ~2000 lines (got " + val.lineCount + ")");
+      assert(val.hasNotice, "serialized stdout has truncation notice");
+      assert(val.hasTempPath, "serialized stdout has temp file path");
+      assert(val.truncatedLineCount <= 2010, "truncated line count reduced (got " + val.truncatedLineCount + ")");
+      assert(val.truncatedLineCount >= 1900, "still has ~2000 truncated lines (got " + val.truncatedLineCount + ")");
+      assert(val.fullLineCount > 4900, "full line count preserved (got " + val.fullLineCount + ")");
+    }
+  });
+
+  await test("Truncation: TruncatedString .slice() uses full text (skip type check)", async () => {
+    // Generate >2000 lines via seq, then use .slice(-20) to get the tail of the FULL output
+    const result = await executeCode(
+      'const r = await $`seq 1 5000`;\n' +
+      '// .slice(-20) should get the tail of the FULL output, not the truncation notice\n' +
+      'const tail = r.stdout.slice(-20);\n' +
+      '// toString()/template literal should give truncated text with notice\n' +
+      'const serialized = `${r.stdout}`;\n' +
+      'const hasNotice = serialized.includes("[Showing lines");\n' +
+      '// .includes() on the TruncatedString should search the FULL text\n' +
+      'const hasLine1 = r.stdout.includes("1\\n2\\n3\\n");\n' +
+      '// .split() should split the FULL text\n' +
+      'const lines = r.stdout.split("\\n");\n' +
+      'return { tail, hasNotice, fullLineCount: lines.length };',
+      mockBindings,
+      { skipTypeCheck: true }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    if (result.success) {
+      const val = result.returnValue;
+      // The tail of "seq 1 5000" ends with "5000\n", so .slice(-20) should contain "5000"
+      assert(val.tail.includes("5000"), "slice(-20) contains '5000' from full output: " + JSON.stringify(val.tail));
+      // But the notice should NOT be in the tail (it's in the truncated version only)
+      assert(!val.tail.includes("[Showing"), "slice(-20) does not contain truncation notice");
+      // Serialization should have the notice
+      assert(val.hasNotice, "serialized text has truncation notice");
+      // .split() on full text should give all 5000+ lines
+      assert(val.fullLineCount > 4900, "split() on full text gives all lines (got " + val.fullLineCount + ")");
+    }
+  });
+
+  await test("Truncation: TruncatedString serialization uses truncated text (skip type check)", async () => {
+    // Verify that print() and return of a TruncatedString use truncated text
+    const result = await executeCode(
+      'const r = await $`seq 1 5000`;\n' +
+      'print("stdout:", r.stdout.toString());\n' +
+      'return "" + r.stdout;',
+      mockBindings,
+      { skipTypeCheck: true }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    if (result.success) {
+      // The return value (string concat with "") should use truncated text
+      assert(typeof result.returnValue === "string", "return is string");
+      assert(result.returnValue.includes("[Showing lines"), "return has truncation notice");
+      assert(!result.returnValue.includes("\n1\n"), "return does not have early lines");
     }
   });
 

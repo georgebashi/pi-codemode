@@ -193,12 +193,102 @@ function formatSize(bytes: number): string {
 }
 
 /**
- * Wrap a ProcessOutput in a Proxy that returns truncated stdout/stderr/stdall.
+ * String methods that should be forwarded to the full text when accessed
+ * on a TruncatedString. These methods may be used by the LLM to extract
+ * specific portions of command output (e.g., `.slice(-500)`, `.split('\n')`).
+ */
+const FORWARDED_STRING_METHODS = new Set([
+  'slice', 'substring', 'substr', 'split', 'match', 'matchAll',
+  'search', 'replace', 'replaceAll', 'indexOf', 'lastIndexOf',
+  'includes', 'startsWith', 'endsWith', 'charAt', 'charCodeAt',
+  'codePointAt', 'at', 'trim', 'trimStart', 'trimEnd',
+  'padStart', 'padEnd', 'repeat', 'normalize',
+  'toUpperCase', 'toLowerCase', 'toLocaleLowerCase', 'toLocaleUpperCase',
+]);
+
+/**
+ * Create a string-like Proxy that operates on full text for string methods
+ * but returns truncated text when serialized.
+ *
+ * This solves the problem where the LLM proactively limits output with patterns
+ * like `result.stdout.slice(-500)` — without this, `.slice(-500)` would operate
+ * on the truncated text (which includes a "[Showing lines...]" notice at the end),
+ * giving the LLM the notice instead of the actual data.
+ *
+ * Behavior:
+ * - String methods (.slice, .split, .includes, etc.) → operate on full text
+ * - Serialization (toString, valueOf, template literals, JSON.stringify) → truncated text
+ * - Numeric index access ([0], [1], etc.) → full text
+ * - .length → full text length
+ *
+ * The returned Proxy has typeof "object" (not "string"), but this is acceptable
+ * because LLMs rarely check typeof on stdout — they just use it as a string.
+ */
+function createTruncatedString(fullText: string, truncatedText: string): string {
+  // Use a plain object as the proxy target to avoid String's
+  // non-configurable 'length' property constraint
+  const target = {} as Record<string | symbol, unknown>;
+
+  return new Proxy(target, {
+    get(_target, prop, _receiver) {
+      // .length → full text
+      if (prop === 'length') return fullText.length;
+
+      // String methods → forward to full text
+      if (typeof prop === 'string' && FORWARDED_STRING_METHODS.has(prop)) {
+        return (...args: unknown[]) => (fullText as any)[prop](...args);
+      }
+
+      // Numeric index access → full text
+      if (typeof prop === 'string' && /^\d+$/.test(prop)) {
+        return fullText[Number(prop)];
+      }
+
+      // Serialization → truncated text
+      if (prop === 'toString' || prop === 'valueOf') {
+        return () => truncatedText;
+      }
+      if (prop === Symbol.toPrimitive) {
+        return () => truncatedText;
+      }
+      if (prop === 'toJSON') {
+        return () => truncatedText;
+      }
+
+      // Iteration → full text
+      if (prop === Symbol.iterator) {
+        return function*() { yield* fullText; };
+      }
+
+      if (prop === Symbol.toStringTag) return 'String';
+
+      return undefined;
+    },
+
+    has(_target, prop) {
+      // Support 'in' operator for numeric indices
+      if (typeof prop === 'string' && /^\d+$/.test(prop)) {
+        return Number(prop) < fullText.length;
+      }
+      return prop === 'length' || prop === 'toString' || prop === 'valueOf'
+        || (typeof prop === 'string' && FORWARDED_STRING_METHODS.has(prop));
+    },
+  }) as unknown as string;
+}
+
+/**
+ * Wrap a ProcessOutput in a Proxy that returns TruncatedString for stdout/stderr/stdall.
  *
  * zx defines stdout/stderr/stdall as non-configurable lazy getters on ProcessOutput,
  * so we can't redefine them with Object.defineProperty. Instead we use a Proxy that
- * intercepts property access and returns truncated values for those three properties.
- * The Proxy preserves instanceof checks and all other ProcessOutput behavior.
+ * intercepts property access and returns TruncatedString values for those three properties.
+ *
+ * The TruncatedString objects are string-like proxies that:
+ * - Return truncated text when serialized (toString, template literals, JSON.stringify)
+ * - Forward string methods (.slice, .split, etc.) to the full text
+ *
+ * This means `result.stdout.slice(-500)` returns the last 500 chars of the FULL output,
+ * while `print(result.stdout)` or `return result.stdout` returns the truncated output.
  */
 function truncateProcessOutput(output: zx.ProcessOutput): zx.ProcessOutput {
   // Access raw values (triggers the lazy join from buffer chunks)
@@ -218,12 +308,23 @@ function truncateProcessOutput(output: zx.ProcessOutput): zx.ProcessOutput {
     }
   }
 
+  // Build TruncatedString proxies: string methods use full text, serialization uses truncated
+  const stdoutStr = truncStdout.wasTruncated
+    ? createTruncatedString(sanitizeOutput(rawStdout), truncStdout.text)
+    : truncStdout.text;
+  const stderrStr = truncStderr.wasTruncated
+    ? createTruncatedString(sanitizeOutput(rawStderr), truncStderr.text)
+    : truncStderr.text;
+  const stdallStr = truncStdall.wasTruncated
+    ? createTruncatedString(sanitizeOutput(rawStdall), truncStdall.text)
+    : truncStdall.text;
+
   // Return a Proxy that intercepts stdout/stderr/stdall access
   return new Proxy(output, {
     get(target, prop, receiver) {
-      if (prop === 'stdout') return truncStdout.text;
-      if (prop === 'stderr') return truncStderr.text;
-      if (prop === 'stdall') return truncStdall.text;
+      if (prop === 'stdout') return stdoutStr;
+      if (prop === 'stderr') return stderrStr;
+      if (prop === 'stdall') return stdallStr;
       return Reflect.get(target, prop, receiver);
     }
   });
