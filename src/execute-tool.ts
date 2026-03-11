@@ -104,15 +104,10 @@ Only use this tool when you need to perform I/O (read/write files, run commands,
           text = `Output before error:\n${result.logs.join("\n")}\n\n${text}`;
         }
 
-        return {
-          content: [{ type: "text" as const, text }],
-          isError: true,
-          details: {
-            errors: result.errors,
-            logs: result.logs,
-            elapsedMs: result.elapsedMs,
-          },
-        };
+        // Throw instead of returning isError — the agent-loop only sets isError=true
+        // on the UI event when execute() throws. Returning isError in the result object
+        // is silently ignored by the framework (overwritten to false).
+        throw new Error(text);
       }
 
       // Format success
@@ -180,31 +175,30 @@ Only use this tool when you need to perform I/O (read/write files, run commands,
       }
 
       const details = result.details ?? {};
-      const isError = result.isError;
+      // The framework strips isError before calling renderResult, so we detect
+      // errors by checking whether our success-path details are present.
+      // On success we always set details.elapsedMs; on error (thrown) the
+      // framework creates details: {} with none of our fields.
+      const isError = !details.elapsedMs;
       const elapsed = details.elapsedMs
         ? ` ${theme.fg("dim", `(${Math.round(details.elapsedMs)}ms)`)}`
         : "";
 
       if (isError) {
+        // On error, the framework catches our thrown Error and puts its message
+        // in content[0].text. Show that directly.
+        const errorText = (result.content?.[0]?.text ?? "Unknown error").trim();
         const errorSeparator = theme.fg("error", "✗") + " " + theme.fg("dim", "─".repeat(78));
-        const errors = details.errors ?? [];
-        const firstError = errors[0]?.message ?? "Unknown error";
         if (!expanded) {
+          const firstLine = errorText.split("\n")[0];
           return new Text(
             errorSeparator + "\n" +
-              theme.fg("error", firstError) + elapsed,
+              theme.fg("error", firstLine) + elapsed,
             0,
             0
           );
         }
-        const lines = errors
-          .map(
-            (e: any) =>
-              theme.fg("error", e.line > 0 ? `Line ${e.line}: ` : "") +
-              e.message
-          )
-          .join("\n");
-        return new Text(errorSeparator + "\n" + lines + elapsed, 0, 0);
+        return new Text(errorSeparator + "\n" + theme.fg("error", errorText) + elapsed, 0, 0);
       }
 
       // Success — trim to avoid leading/trailing blank lines
