@@ -407,7 +407,7 @@ function createTruncating$(
 
   // Return a tagged template function that wraps the ProcessPromise
   const wrapped = function(pieces: TemplateStringsArray, ...args: any[]) {
-    const proc = base$(pieces, ...args);
+    const proc: zx.ProcessPromise = base$(pieces, ...args) as zx.ProcessPromise;
 
     // Wrap .then to intercept the ProcessOutput and truncate it
     const origThen = proc.then.bind(proc);
