@@ -86,7 +86,7 @@ export default function codeMode(pi: ExtensionAPI) {
 
   // Build system prompt summary: compact MCP listing (not full types)
   const mcpSummary = generateMcpSummaryForPrompt(mcpServers);
-  const userPackageNames = userPackages.map(p => p.varName);
+  const userPackageInfo = userPackages.map(p => ({ varName: p.varName, specifier: p.specifier, description: p.description }));
 
   // --- Read shell command prefix from pi settings ---
   // This prefix (e.g., "export TERM=dumb CI=true ...") is prepended to every
@@ -131,7 +131,11 @@ export default function codeMode(pi: ExtensionAPI) {
       name: t.name,
       description: t.description,
     }));
-    buildSearchIndex(piTools, mcpClient);
+    buildSearchIndex(piTools, mcpClient, userPackages.map(p => ({
+      varName: p.varName,
+      specifier: p.specifier,
+      description: p.description,
+    })));
 
     // Activate code mode: only execute_tools visible to LLM
     activateCodeMode();
@@ -152,7 +156,7 @@ export default function codeMode(pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event) => {
     if (!enabled) return;
 
-    const addition = generateSystemPromptAddition(builtinTypeDefs, mcpSummary, userPackageNames);
+    const addition = generateSystemPromptAddition(builtinTypeDefs, mcpSummary, userPackageInfo);
     return {
       systemPrompt: event.systemPrompt + "\n\n" + addition,
     };

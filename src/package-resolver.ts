@@ -32,6 +32,8 @@ export interface ResolvedPackage {
   hasTypes: boolean;
   /** Which scope this came from */
   scope: "global" | "project";
+  /** Human-readable description (from config or package.json) */
+  description: string;
 }
 
 /** Raw config format from codemode.json */
@@ -42,6 +44,8 @@ export interface CodemodeConfig {
 export interface PackageSpec {
   version: string;
   as?: string;
+  /** Description shown in search_tools results and system prompt */
+  description?: string;
 }
 
 /**
@@ -110,7 +114,7 @@ function loadConfig(configPath: string, warnings: string[]): CodemodeConfig | nu
 function normalizeEntry(
   specifier: string,
   value: string | PackageSpec
-): { version: string; varName: string } {
+): { version: string; varName: string; description?: string } {
   if (typeof value === "string") {
     return {
       version: value,
@@ -120,6 +124,7 @@ function normalizeEntry(
   return {
     version: value.version,
     varName: value.as ?? specifierToVarName(specifier),
+    description: value.description,
   };
 }
 
@@ -162,7 +167,7 @@ function ensureInstalledAndResolve(
   // Build desired dependencies (including @types/* for type checking)
   const desiredDeps: Record<string, string> = {};
   let optionalTypeDeps: Record<string, string> | undefined;
-  const entryMap = new Map<string, { version: string; varName: string }>();
+  const entryMap = new Map<string, { version: string; varName: string; description?: string }>();
 
   for (const [specifier, value] of entries) {
     const normalized = normalizeEntry(specifier, value);
@@ -256,6 +261,19 @@ function ensureInstalledAndResolve(
       const pkgDir = findPackageDir(specifier, nodeModulesDir);
       const hasTypes = pkgDir ? packageHasTypes(specifier, pkgDir, nodeModulesDir) : false;
 
+      // Resolve description: config description > package.json description > npm specifier
+      let description = entry.description;
+      if (!description && pkgDir) {
+        try {
+          const pkgJsonPath = pathReal.join(pkgDir, "package.json");
+          const pkgJson = JSON.parse(fsReal.readFileSync(pkgJsonPath, "utf-8"));
+          description = pkgJson.description;
+        } catch {}
+      }
+      if (!description) {
+        description = specifier;
+      }
+
       resolved.push({
         specifier,
         versionRange: entry.version,
@@ -264,6 +282,7 @@ function ensureInstalledAndResolve(
         packageDir: pkgDir ?? pathReal.dirname(resolvedPath),
         hasTypes,
         scope,
+        description,
       });
     } catch (e: any) {
       warnings.push(`Failed to resolve package "${specifier}": ${e.message}`);

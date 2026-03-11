@@ -8,17 +8,24 @@
 // Full MCP type signatures live only in the type checker — the LLM uses
 // describe_tools() to browse and search_tools() to search before calling.
 
+/** Info about a user-configured package for the system prompt. */
+interface PackageInfo {
+  varName: string;
+  specifier: string;
+  description: string;
+}
+
 /**
  * Generate the system prompt addition for code mode.
  *
  * @param builtinTypeDefs - TypeScript type declarations for built-in tools only
  * @param mcpSummary - Compact MCP server summary (namespace names only)
- * @param userPackageNames - Variable names of user-configured packages
+ * @param userPackages - User-configured packages with descriptions
  */
 export function generateSystemPromptAddition(
   builtinTypeDefs: string,
   mcpSummary: string,
-  userPackageNames?: string[]
+  userPackages?: PackageInfo[]
 ): string {
   return `\
 ## Code Mode
@@ -166,7 +173,8 @@ print(found);
 ### Utilities
 
 - \`JSON.parse()\` / \`JSON.stringify()\` — parse and serialize JSON
-${userPackageNames && userPackageNames.length > 0 ? '\n### Additional Packages\n\nAvailable as globals: \`' + userPackageNames.join('\`, \`') + '\`\n' : ''}
+- \`YAML.parse()\` / \`YAML.stringify()\` — parse and serialize YAML
+${userPackages && userPackages.length > 0 ? '\n### Additional Packages\n\nThe following npm packages are available as globals in the sandbox. Use them directly — they are not tools, just regular JavaScript libraries.\n\n' + userPackages.map(p => '- \`' + p.varName + '\` — ' + p.description + ' (npm: ' + p.specifier + ')').join('\n') + '\n' : ''}
 ### Important
 - **Parallelize independent calls** — use \`Promise.all\` whenever calls don't depend on each other
 - **Chain dependent calls** — use the result of one call to determine what to call next

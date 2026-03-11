@@ -24,12 +24,23 @@ interface SearchDoc {
 let index: MiniSearch<SearchDoc> | null = null;
 let docs: SearchDoc[] = [];
 
+/** Info about a user-configured package for indexing. */
+export interface UserPackageInfo {
+  /** Global variable name (e.g., "git", "YAML", "graphql") */
+  varName: string;
+  /** npm specifier (e.g., "simple-git", "yaml", "@octokit/graphql") */
+  specifier: string;
+  /** Human-readable description */
+  description: string;
+}
+
 /**
- * Build/rebuild the search index from Pi tools and MCP tools.
+ * Build/rebuild the search index from Pi tools, MCP tools, and user packages.
  */
 export function buildSearchIndex(
   piTools: Array<{ name: string; description?: string }>,
-  mcpClient?: McpClient
+  mcpClient?: McpClient,
+  userPackages?: UserPackageInfo[]
 ): void {
   docs = [];
 
@@ -61,6 +72,20 @@ export function buildSearchIndex(
           params: paramNames.join(" "),
         });
       }
+    }
+  }
+
+  // Index user-configured packages (available as globals in the sandbox)
+  if (userPackages) {
+    for (const pkg of userPackages) {
+      docs.push({
+        id: `package:${pkg.varName}`,
+        name: pkg.varName,
+        description: `${pkg.description} (npm: ${pkg.specifier}). Available as global \`${pkg.varName}\`. Use directly in code — not a tool, just import and call.`,
+        source: "package",
+        callSig: pkg.varName,
+        params: pkg.specifier,
+      });
     }
   }
 
