@@ -84,14 +84,6 @@ interface BuiltinTools {
 /** Print output to include in the result returned to you. */
 declare function print(...args: any[]): void;
 
-/** YAML parser/serializer (yaml npm package). */
-declare const YAML: {
-  /** Parse a YAML string into a JavaScript value. */
-  parse(yaml: string): any;
-  /** Serialize a JavaScript value to a YAML string. */
-  stringify(value: any): string;
-};
-
 // --- zx shell scripting (resolved from real zx .d.ts via module resolution) ---
 
 import type { ProcessPromise, ProcessOutput, $ as Shell } from 'zx';
@@ -142,13 +134,6 @@ declare const path: typeof import('path');
 
 /** Node.js fs-extra module (fs + extra utilities). */
 declare const fs: typeof import('fs-extra');
-
-// --- simple-git (resolved from real simple-git .d.ts via module resolution) ---
-
-import type { SimpleGit } from 'simple-git';
-
-/** Pre-configured simple-git instance for the working directory. */
-declare const git: SimpleGit;
 
 // Re-export types so user code can reference ProcessOutput/ProcessPromise by name
 type _ProcessOutput = ProcessOutput;

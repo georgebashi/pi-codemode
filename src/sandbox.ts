@@ -15,9 +15,7 @@ import { join } from "node:path";
 import { transformSync } from "esbuild";
 import { typeCheck, type TypeCheckError } from "./type-checker.js";
 import type { ToolBindings } from "./tool-bindings.js";
-import YAML from "yaml";
 import * as zx from "zx";
-import { simpleGit } from "simple-git";
 
 // Suppress zx's default verbose logging (prints commands to stderr)
 zx.$.verbose = false;
@@ -577,7 +575,6 @@ export async function executeCode(
     queueMicrotask,
     atob,
     btoa,
-    YAML,
 
     // zx shell scripting utilities — $ is configured with cwd, abort signal, and shell prefix
     $: createTruncating$(cwd, signal, onUpdate, shellPrefix),
@@ -595,9 +592,6 @@ export async function executeCode(
     path: zx.path,
     fs: zx.fs,
     ProcessOutput: zx.ProcessOutput,
-
-    // simple-git — pre-configured for the working directory
-    git: simpleGit(cwd),
 
     // User-configured packages (override built-ins if same name)
     ...userPackages,

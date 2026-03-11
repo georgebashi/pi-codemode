@@ -35,7 +35,7 @@ Inspired by Cloudflare's [Code Mode](https://blog.cloudflare.com/code-mode/) pat
 │  Built-in: read, write, edit                    │
 │  Shell: zx $ (with truncation + streaming)      │
 │  MCP: lazy-connected server namespaces          │
-│  Git: simple-git                                │
+│  User packages: configurable via codemode.json  │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -47,8 +47,7 @@ Inspired by Cloudflare's [Code Mode](https://blog.cloudflare.com/code-mode/) pat
 - **Shell via zx** — `$\`command\`` template literals with automatic argument escaping, output truncation (2000 lines / 50KB tail), and streaming to the UI.
 - **MCP integration** — All MCP servers available as typed namespaces (`tools.slack.channels_me()`). Tool metadata loaded from cache (instant), servers connect lazily on first call.
 - **Progressive discovery** — System prompt stays small. The LLM uses `search_tools()` (MiniSearch FTS) and `describe_tools()` to find and inspect tools at runtime.
-- **Git** — Pre-configured `simple-git` instance available as `git` global.
-- **YAML** — `YAML.parse()` / `YAML.stringify()` available in the sandbox.
+- **User packages** — Configure additional npm packages via `codemode.json`. Auto-installed, with TypeScript types when available.
 - **Output truncation** — Shell output tail-truncated to 2000 lines / 50KB with full output saved to temp files. Binary/control characters sanitized.
 - **Cancellation** — Abort signal support for cancelling long-running code.
 
@@ -116,15 +115,6 @@ const [status, branch] = await Promise.all([
 ]);
 ```
 
-### Git (simple-git)
-
-```typescript
-const status = await git.status();
-const log = await git.log({ maxCount: 5 });
-await git.add(".");
-await git.commit("fix: resolve issue");
-```
-
 ### MCP tools
 
 ```typescript
@@ -152,6 +142,72 @@ const [pkg, readme, config] = await Promise.all([
 ]);
 ```
 
+## User Packages
+
+Configure additional npm packages to be available in the sandbox. Packages are auto-installed into dedicated directories (your project's `node_modules` is never touched).
+
+### Configuration
+
+**Project-local** — create `.pi/codemode.json` in your project root:
+
+```jsonc
+{
+  "packages": {
+    "lodash": ">=4.17.21",
+    "csv-parse": { "version": "^5.0.0", "as": "csvParse" }
+  }
+}
+```
+
+**Global** (all projects) — create `~/.pi/agent/codemode.json`:
+
+```jsonc
+{
+  "packages": {
+    "lodash": ">=4.17.21"
+  }
+}
+```
+
+Packages are installed into `.pi/codemode-packages/` (project) or `~/.pi/agent/codemode-packages/` (global). Add `.pi/codemode-packages/` to your `.gitignore`.
+
+### Override order
+
+Project packages override global packages for the same variable name. User packages can also override built-in globals (`fs`, `path`, `os`, `$`, etc.).
+
+### Recommended packages
+
+These packages are commonly useful in codemode and are strongly recommended:
+
+```jsonc
+{
+  "packages": {
+    "simple-git": { "version": "^3.33.0", "as": "git" },
+    "yaml": { "version": "^2.8.0", "as": "YAML" }
+  }
+}
+```
+
+This gives you:
+
+```typescript
+// Git operations (simple-git)
+const status = await git.status();
+const log = await git.log({ maxCount: 5 });
+await git.add(".");
+await git.commit("fix: resolve issue");
+
+// YAML parsing
+const config = YAML.parse(await tools.read({ path: "config.yml" }));
+```
+
+### Type checking
+
+TypeScript types are automatically resolved:
+- If the package ships its own types (`types` field in package.json), they're loaded directly
+- If `@types/*` exists on npm, it's auto-installed as an optional dependency
+- If no types are available, the package is typed as `any` (still usable, just untyped)
+
 ## Commands
 
 | Command | Description |
@@ -173,6 +229,7 @@ const [pkg, readme, config] = await Promise.all([
 | `src/tool-bindings.ts` | Runtime bindings that back the type declarations |
 | `src/mcp-client.ts` | MCP client with lazy connections and metadata cache |
 | `src/search.ts` | Full-text search over all tools (MiniSearch) |
+| `src/package-resolver.ts` | User package resolution, auto-install, and config loading |
 | `src/system-prompt.ts` | System prompt injection with type defs and examples |
 
 ### Pipeline
@@ -196,7 +253,7 @@ The type checker uses a virtual file system containing:
 - ES2022 lib `.d.ts` files (pre-parsed once at init, ~150ms)
 - `@types/node`, `@types/fs-extra`, `@types/jsonfile` for Node.js types
 - `zx` type definitions for shell commands
-- `simple-git` type definitions
+- User package type definitions (auto-resolved)
 - Tool API declarations (built-in + MCP)
 - The user's code wrapped in an async IIFE
 
@@ -232,9 +289,7 @@ The bigger win is **round-trips**: "read file A, grep for X, read matches, extra
 - **[typescript](https://www.typescriptlang.org/)** — Type-checking LLM-generated code
 - **[esbuild](https://esbuild.github.io/)** — Fast type stripping
 - **[zx](https://google.github.io/zx/)** — Shell commands with template literals
-- **[simple-git](https://github.com/steveukx/git-js)** — Git operations
 - **[minisearch](https://lucaong.github.io/minisearch/)** — Full-text tool search
-- **[yaml](https://eemeli.org/yaml/)** — YAML parsing/serialization
 - **[pi-mcp-adapter](https://github.com/nichochar/pi-mcp-adapter)** — MCP server management and metadata cache
 - **[fs-extra](https://github.com/jprichardson/node-fs-extra)** — Enhanced file system operations
 

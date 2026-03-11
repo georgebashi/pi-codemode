@@ -6,7 +6,6 @@ const esbuild = require("esbuild");
 const vm = require("vm");
 const fs = require("fs");
 const path = require("path");
-const YAML = require("yaml");
 const zx = require("zx");
 
 // Suppress zx verbose logging
@@ -58,7 +57,6 @@ const TYPE_DEFS = [
   "  progress(message: string): void;",
   "};",
   "declare function print(...args: any[]): void;",
-  "declare const YAML: { parse(yaml: string): any; stringify(value: any): string; };",
 ].join("\n");
 
 const TYPE_DEF_LINE_COUNT = TYPE_DEFS.split("\n").length;
@@ -317,7 +315,7 @@ async function executeCode(tsCode, bindings, { skipTypeCheck = false, shellPrefi
     Promise, setTimeout, clearTimeout, JSON, Array, Object, Map, Set, Math, Date, RegExp, Error,
     TypeError, RangeError, Number, String, Boolean, Symbol,
     parseInt, parseFloat, isNaN, isFinite, encodeURIComponent, decodeURIComponent,
-    undefined, NaN, Infinity, URL, URLSearchParams, YAML,
+    undefined, NaN, Infinity, URL, URLSearchParams,
     // zx shell utilities — uses truncating wrapper with optional prefix
     $: createTruncating$(process.cwd(), shellPrefix),
     cd: zx.cd,
@@ -327,8 +325,6 @@ async function executeCode(tsCode, bindings, { skipTypeCheck = false, shellPrefi
     fs: require("fs-extra"),
     os: require("os"),
     ProcessOutput: zx.ProcessOutput,
-    // simple-git — pre-configured for cwd
-    git: require("simple-git").simpleGit(process.cwd()),
     // User-configured packages (override built-ins if same name)
     ...userPackages,
   });
@@ -492,13 +488,15 @@ async function test(name, fn) {
     try { fs.unlinkSync(tmpFile); } catch {}
   });
 
-  await test("Pipeline: YAML parse and stringify", async () => {
+  await test("Pipeline: YAML via user package (skip type check)", async () => {
+    const YAML = require("yaml");
     const result = await executeCode(
       'const yamlStr = "name: test\\nversion: 1\\nitems:\\n  - a\\n  - b";\n' +
       'const parsed = YAML.parse(yamlStr);\n' +
       'const back = YAML.stringify(parsed);\n' +
       'return { parsed, roundtrip: back };',
-      mockBindings
+      mockBindings,
+      { skipTypeCheck: true, userPackages: { YAML } }
     );
     assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
     if (result.success) {
@@ -666,37 +664,6 @@ async function test(name, fn) {
     }
   });
 
-  // --- simple-git tests ---
-
-  await test("Pipeline: simple-git status (skip type check)", async () => {
-    const result = await executeCode(
-      'const status = await git.status();\n' +
-      'return { branch: status.current, isClean: status.isClean() };',
-      mockBindings,
-      { skipTypeCheck: true }
-    );
-    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
-    if (result.success) {
-      assert(typeof result.returnValue.branch === "string", "has branch: " + result.returnValue.branch);
-      assert(typeof result.returnValue.isClean === "boolean", "isClean is boolean");
-    }
-  });
-
-  await test("Pipeline: simple-git log (skip type check)", async () => {
-    const result = await executeCode(
-      'const log = await git.log({ maxCount: 3 });\n' +
-      'return log.all.map(c => ({ hash: c.hash.slice(0, 7), message: c.message }));',
-      mockBindings,
-      { skipTypeCheck: true }
-    );
-    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
-    if (result.success) {
-      assert(Array.isArray(result.returnValue), "returns array");
-      assert(result.returnValue.length > 0, "has commits");
-      assert(result.returnValue[0].hash.length === 7, "has short hash");
-    }
-  });
-
   // --- User packages tests ---
 
   await test("Pipeline: user packages injected into sandbox (skip type check)", async () => {
@@ -721,14 +688,29 @@ async function test(name, fn) {
   });
 
   await test("Pipeline: user package overrides built-in (skip type check)", async () => {
-    // Override YAML with a custom object
+    // Override path with a custom object
     const result = await executeCode(
-      'return YAML.custom;',
+      'return path.custom;',
       mockBindings,
-      { skipTypeCheck: true, userPackages: { YAML: { custom: true, parse: () => null, stringify: () => "" } } }
+      { skipTypeCheck: true, userPackages: { path: { custom: true, join: () => "" } } }
     );
     assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
-    assert(result.returnValue === true, "overrode built-in YAML, got: " + result.returnValue);
+    assert(result.returnValue === true, "overrode built-in path, got: " + result.returnValue);
+  });
+
+  await test("Pipeline: simple-git via user package (skip type check)", async () => {
+    const simpleGit = require("simple-git");
+    const result = await executeCode(
+      'const status = await git.status();\n' +
+      'return { branch: status.current, isClean: status.isClean() };',
+      mockBindings,
+      { skipTypeCheck: true, userPackages: { git: simpleGit.simpleGit(process.cwd()) } }
+    );
+    assert(result.success, "success (" + result.errors.map(e => e.message).join(", ") + ")");
+    if (result.success) {
+      assert(typeof result.returnValue.branch === "string", "has branch: " + result.returnValue.branch);
+      assert(typeof result.returnValue.isClean === "boolean", "isClean is boolean");
+    }
   });
 
   await test("Pipeline: multiple user packages (skip type check)", async () => {
