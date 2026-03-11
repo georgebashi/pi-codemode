@@ -94,7 +94,7 @@ export default function codeMode(pi: ExtensionAPI) {
 
   /** Rebuild type checker type defs. Called at init and after pi tools are discovered. */
   function rebuildTypeDefs(): string {
-    const mcpTypeDefs = generateMcpServerTypeDefs(mcpServers, piTools);
+    const mcpTypeDefs = generateMcpServerTypeDefs(mcpServers);
     const piTypeDefs = generatePiToolsTypeDefs(piTools);
     return builtinTypeDefs + "\n" + mcpTypeDefs + "\n" + piTypeDefs + "\n" + packageTypeDefs;
   }

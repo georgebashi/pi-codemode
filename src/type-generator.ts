@@ -15,7 +15,7 @@ import type { PiToolInfo } from "./pi-tool-proxy.js";
 export function generateBuiltinTypeDefs(): string {
   return `\
 /** Tool API available inside execute_tools code blocks. */
-declare const tools: BuiltinTools & McpServerNamespaces;
+declare const tools: BuiltinTools & PiToolNamespace & McpNamespace;
 
 interface BuiltinTools {
   /**
@@ -161,28 +161,28 @@ declare const π: Readonly<Record<string, string>>;
  * Used by the TYPE CHECKER — includes all tool signatures from inputSchema.
  * This is NOT injected into the system prompt (too large).
  */
-export function generateMcpServerTypeDefs(servers: McpServerInfo[], piTools?: PiToolInfo[]): string {
-  const hasMcp = servers.length > 0;
-  const hasPi = piTools && piTools.length > 0;
-
-  if (!hasMcp && !hasPi) {
+export function generateMcpServerTypeDefs(servers: McpServerInfo[]): string {
+  if (servers.length === 0) {
     return `\
 /** No MCP servers are configured. */
-interface McpServerNamespaces {}
+interface McpNamespace {}
 `;
   }
 
   const parts: string[] = [];
 
-  // Generate the McpServerNamespaces interface
-  parts.push(`interface McpServerNamespaces {`);
+  // Generate the McpNamespace wrapper: tools.mcp.<server>.<tool>()
+  parts.push(`interface McpNamespace {`);
+  parts.push(`  /** MCP servers */`);
+  parts.push(`  mcp: McpServers;`);
+  parts.push(`}`);
+  parts.push(``);
+
+  // Generate the McpServers interface with one property per server
+  parts.push(`interface McpServers {`);
   for (const server of servers) {
     parts.push(`  /** MCP server: ${server.serverName} (${server.tools.length} tools) */`);
     parts.push(`  ${server.namespace}: ${serverInterfaceName(server.namespace)};`);
-  }
-  if (hasPi) {
-    parts.push(`  /** Pi extension tools (${piTools!.length} tools) */`);
-    parts.push(`  pi: McpPiTools;`);
   }
   parts.push(`}`);
   parts.push(``);
@@ -193,7 +193,6 @@ interface McpServerNamespaces {}
     parts.push(`interface ${ifaceName} {`);
     for (const tool of server.tools) {
       if (tool.description) {
-        // Escape JSDoc-breaking chars
         const desc = tool.description.replace(/\*\//g, "* /").replace(/\n/g, " ");
         parts.push(`  /** ${desc} */`);
       }
@@ -221,7 +220,7 @@ export function generateMcpSummaryForPrompt(servers: McpServerInfo[]): string {
   const lines: string[] = [];
   lines.push(`### MCP Servers`);
   lines.push(``);
-  lines.push(`The following MCP servers are available as typed namespaces on \`tools\`.`);
+  lines.push(`The following MCP servers are available under \`tools.mcp\`.`);
   lines.push(`Use \`describe_tools\` to browse tools in a namespace and see their parameters.`);
   lines.push(`Use \`search_tools\` to find tools by keyword across all servers.`);
   lines.push(``);
@@ -229,9 +228,9 @@ export function generateMcpSummaryForPrompt(servers: McpServerInfo[]): string {
   for (const server of servers) {
     const count = server.tools.length;
     if (count === 0) {
-      lines.push(`- **tools.${server.namespace}** — ${server.serverName} (connect on first call)`);
+      lines.push(`- **tools.mcp.${server.namespace}** — ${server.serverName} (connect on first call)`);
     } else {
-      lines.push(`- **tools.${server.namespace}** — ${server.serverName} (${count} tools)`);
+      lines.push(`- **tools.mcp.${server.namespace}** — ${server.serverName} (${count} tools)`);
     }
   }
 
@@ -264,7 +263,9 @@ export function generateToolSignature(
     ? jsonSchemaToTypeString(inputSchema, "")
     : "Record<string, unknown>";
   const argsOptional = !hasRequiredProperties(inputSchema);
-  lines.push(`tools.${namespace}.${toolName}(args${argsOptional ? "?" : ""}: ${paramsType}): Promise<string>`);
+  // Pi tools use tools.pi.<tool>, MCP tools use tools.mcp.<namespace>.<tool>
+  const prefix = namespace === "pi" ? "tools.pi" : `tools.mcp.${namespace}`;
+  lines.push(`${prefix}.${toolName}(args${argsOptional ? "?" : ""}: ${paramsType}): Promise<string>`);
   return lines.join("\n");
 }
 
@@ -434,10 +435,18 @@ export function generatePackageTypeDefs(
  * Uses the same jsonSchemaToTypeString as MCP tools since TypeBox schemas are JSON Schema compatible.
  */
 export function generatePiToolsTypeDefs(piTools: PiToolInfo[]): string {
-  if (piTools.length === 0) return "";
+  if (piTools.length === 0) return "interface PiToolNamespace {}\n";
 
   const parts: string[] = [];
-  parts.push(`interface McpPiTools {`);
+
+  // Wrapper: tools.pi.<tool>()
+  parts.push(`interface PiToolNamespace {`);
+  parts.push(`  /** Pi extension tools (${piTools.length} tools) */`);
+  parts.push(`  pi: PiTools;`);
+  parts.push(`}`);
+  parts.push(``);
+
+  parts.push(`interface PiTools {`);
 
   for (const tool of piTools) {
     if (tool.description) {

@@ -15,7 +15,7 @@ interface SearchDoc {
   description: string;
   /** "pi" or MCP server namespace */
   source: string;
-  /** How to call it: "tools.read({ path })" or "tools.slack.channels_me({ ... })" */
+  /** How to call it: "tools.read({ path })" or "tools.mcp.slack.channels_me({ ... })" */
   callSig: string;
   /** Parameter names joined (for matching on param names) */
   params: string;
@@ -72,7 +72,7 @@ export function buildSearchIndex(
           name: tool.name,
           description: tool.description ?? "",
           source: server.namespace,
-          callSig: `tools.${server.namespace}.${tool.name}()`,
+          callSig: `tools.mcp.${server.namespace}.${tool.name}()`,
           params: paramNames.join(" "),
         });
       }

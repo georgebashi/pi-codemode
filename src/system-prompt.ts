@@ -163,7 +163,7 @@ const details = await tools.describe_tools({ namespace: "slack", tool: "channels
 print(details);
 
 // Step 3: Call with the correct parameters
-const channels = await tools.slack.channels_me({ channel_types: "im", limit: 20 });
+const channels = await tools.mcp.slack.channels_me({ channel_types: "im", limit: 20 });
 return channels;
 \`\`\`
 

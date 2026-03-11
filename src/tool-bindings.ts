@@ -144,9 +144,9 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
       if (!params.tool) {
         // List all tools in this namespace
         if (server.tools.length === 0) {
-          return `tools.${server.namespace} has no cached tools. Call any tool to trigger a connection.`;
+          return `tools.mcp.${server.namespace} has no cached tools. Call any tool to trigger a connection.`;
         }
-        let text = `tools.${server.namespace} — ${server.tools.length} tools:\n\n`;
+        let text = `tools.mcp.${server.namespace} — ${server.tools.length} tools:\n\n`;
         for (const t of server.tools) {
           text += `  ${t.name}`;
           if (t.description) {
@@ -161,7 +161,7 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
       const tool = server.tools.find((t) => t.name === params.tool);
       if (!tool) {
         const names = server.tools.map((t) => t.name).join(", ");
-        return `Unknown tool "${params.tool}" in tools.${server.namespace}. Available: ${names}`;
+        return `Unknown tool "${params.tool}" in tools.mcp.${server.namespace}. Available: ${names}`;
       }
       return generateToolSignature(server.namespace, tool.name, tool.description, tool.inputSchema);
     },
@@ -175,10 +175,12 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
     },
   };
 
-  // Add per-server MCP namespaces as proxy objects
-  // e.g., tools.slack = { channels_me(args) { ... }, ... }
+  // Add MCP server namespaces under tools.mcp
+  // e.g., tools.mcp.slack = { channels_me(args) { ... }, ... }
   // Built from cache info — mcpClient.call() lazy-connects on first use
   if (mcpClient?.available) {
+    const mcpNamespace: Record<string, unknown> = {};
+
     for (const server of mcpClient.getServers()) {
       const serverProxy: Record<string, (args?: Record<string, unknown>) => Promise<string>> = {};
 
@@ -189,12 +191,10 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
         };
       }
 
-      // Also add a Proxy fallback so uncached tool names still work
-      // (they'll fail at runtime with a clear error from the server)
-      bindings[server.namespace] = new Proxy(serverProxy, {
+      // Proxy fallback so uncached tool names still work
+      mcpNamespace[server.namespace] = new Proxy(serverProxy, {
         get(target, prop: string) {
           if (prop in target) return target[prop];
-          // Return a function that attempts the call (will lazy-connect)
           return async (args?: Record<string, unknown>) => {
             if (signal?.aborted) throw new Error("Execution cancelled");
             return mcpClient.call(server.namespace, prop, args);
@@ -202,6 +202,8 @@ export function createToolBindings(options: ToolBindingsOptions): ToolBindings {
         },
       });
     }
+
+    bindings["mcp"] = mcpNamespace;
   }
 
   // Add pi tool namespace for extension-registered tools
